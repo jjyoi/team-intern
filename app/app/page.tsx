@@ -2,6 +2,7 @@
 
 import { useMemo, useState, type ReactNode } from 'react';
 import {
+  AlertTriangle,
   ArrowLeft,
   ArrowRight,
   Bell,
@@ -15,21 +16,28 @@ import {
   CircleAlert,
   Clock3,
   FileCheck2,
+  Copy,
+  Eye,
+  EyeOff,
   Headset,
   Headphones,
   HelpCircle,
   KeyRound,
   Laptop,
   LayoutDashboard,
+  LockKeyhole,
   Mail,
   Monitor,
   PackageCheck,
   Plus,
+  RefreshCw,
   Search,
   Save,
+  Send,
   Settings,
   ShieldCheck,
   Sparkles,
+  Smartphone,
   TicketCheck,
   UserMinus,
   UserCog,
@@ -52,6 +60,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import { Progress } from '@/components/ui/progress';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 type Section = 'overview' | 'people' | 'profiles' | 'timeline';
 type JourneyType = 'onboarding' | 'offboarding';
@@ -226,7 +235,7 @@ export default function Home() {
 
       <JourneyDialog open={createOpen} onOpenChange={setCreateOpen} type={journeyType} onType={setJourneyType} onSubmit={launchJourney} />
       <RoleProfileDialog open={profileOpen} onOpenChange={setProfileOpen} onSave={saveRoleProfile} />
-      <PersonDialog person={detail} onClose={() => setDetail(null)} completedTasks={completedTasks} onToggleTask={toggleTask} progress={detailProgress} />
+      <PersonDialog key={detail?.id ?? 'closed'} person={detail} onClose={() => setDetail(null)} completedTasks={completedTasks} onToggleTask={toggleTask} progress={detailProgress} />
 
       {notice && (
         <div role="status" className="fixed bottom-5 right-5 z-[70] flex max-w-sm items-center gap-3 rounded-2xl border border-black/10 bg-[#1c1b1a] px-4 py-3.5 text-xs font-medium text-white shadow-2xl shadow-black/20">
@@ -498,14 +507,99 @@ function SectionHeading({ icon, title, description }: { icon: ReactNode; title: 
 }
 
 function PersonDialog({ person, onClose, completedTasks, onToggleTask, progress }: { person: Person | null; onClose: () => void; completedTasks: string[]; onToggleTask: (id: string, checked: boolean) => void; progress: number }) {
+  const [revealedCodes, setRevealedCodes] = useState<string[]>([]);
+  const [remindedDevices, setRemindedDevices] = useState<string[]>([]);
+  const [profileNotice, setProfileNotice] = useState('');
+
+  const accessItems = [
+    { id: 'jira', product: 'Jira', request: 'RITM001842', state: 'Code ready', source: 'Outlook', kind: 'Activation code', value: 'JIRA-DEMO-4X7Q-92LM', expires: 'Expires in 23 hours', ready: true },
+    { id: 'intellij', product: 'IntelliJ IDEA', request: 'RITM001856', state: 'Licence ready', source: 'Outlook', kind: 'Licence key', value: 'IJ-DEMO-82KQ-51NX', expires: 'Valid for 12 months', ready: true },
+    { id: 'm365', product: 'Microsoft 365', request: 'RITM001878', state: 'Temporary access', source: 'ServiceNow', kind: 'Temporary password', value: 'Temp-Demo-749!', expires: 'Reset required at first sign-in', ready: true },
+    { id: 'bloomberg', product: 'Bloomberg Terminal', request: 'RITM001870', state: 'Awaiting approval', source: 'ServiceNow', kind: 'Manager approval', value: '', expires: 'Submitted Oct 7', ready: false },
+  ];
+
+  const devices = person?.id === 'maya'
+    ? [
+        { id: 'laptop', name: 'MacBook Pro 14-inch', icon: Laptop, asset: 'SCB-LT-04821', current: 'macOS 15.2', latest: 'macOS 15.3', checked: 'Checked 2 hours ago', update: true },
+        { id: 'phone', name: 'iPhone 15', icon: Smartphone, asset: 'SCB-MOB-1098', current: 'iOS 18.1', latest: 'iOS 18.2', checked: 'Checked today', update: true },
+        { id: 'headset', name: 'Jabra Evolve2 50', icon: Headset, asset: 'SCB-AUD-7714', current: 'Firmware 1.0.9', latest: 'Firmware 1.0.9', checked: 'Checked yesterday', update: false },
+      ]
+    : [
+        { id: 'laptop', name: 'ThinkPad T14', icon: Laptop, asset: 'SCB-LT-05244', current: 'Windows 11 24H2', latest: 'Windows 11 24H2', checked: 'Checked today', update: false },
+        { id: 'phone', name: 'iPhone 14', icon: Smartphone, asset: 'SCB-MOB-0862', current: 'iOS 18.1', latest: 'iOS 18.2', checked: 'Checked today', update: true },
+        { id: 'headset', name: 'Jabra Evolve2 50', icon: Headset, asset: 'SCB-AUD-6851', current: 'Firmware 1.0.9', latest: 'Firmware 1.0.9', checked: 'Checked yesterday', update: false },
+      ];
+
+  function flash(message: string) {
+    setProfileNotice(message);
+    window.setTimeout(() => setProfileNotice(''), 3200);
+  }
+
+  function toggleCode(id: string) {
+    setRevealedCodes((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  }
+
+  function copyDemoCode(value: string, product: string) {
+    void navigator.clipboard?.writeText(value);
+    flash(`${product} demo code copied.`);
+  }
+
+  function remind(deviceId: string, deviceName: string) {
+    setRemindedDevices((current) => [...new Set([...current, deviceId])]);
+    flash(`Outlook reminder prepared for ${person?.name} about ${deviceName}.`);
+  }
+
+  const updateCount = devices.filter((device) => device.update).length;
+
   return (
     <Dialog open={Boolean(person)} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-h-[92vh] gap-0 overflow-y-auto rounded-[22px] p-0 sm:max-w-[650px]">
-        {person && <><div className="bg-[#23201f] px-6 pb-6 pt-7 text-white"><DialogHeader><div className="flex items-start gap-4"><div className="grid size-12 shrink-0 place-items-center rounded-2xl bg-white/10 text-sm font-bold">{person.initials}</div><div className="min-w-0 flex-1"><DialogTitle className="text-xl text-white">{person.name}</DialogTitle><DialogDescription className="mt-1 text-white/45">{person.role} · {person.group}</DialogDescription></div><StatusBadge status={person.status} label={person.statusLabel} /></div></DialogHeader><div className="mt-6"><div className="mb-2 flex justify-between text-[10px]"><span className="font-semibold text-white/60">Journey progress</span><span className="text-white/40">{person.id === 'maya' ? progress : person.progress}% complete</span></div><Progress value={person.id === 'maya' ? progress : person.progress} className="[&_[data-slot=progress-track]]:h-2 [&_[data-slot=progress-track]]:bg-white/10 [&_[data-slot=progress-indicator]]:bg-[#ff4c53]" /></div></div>
-          <div className="px-6 py-6"><div className="mb-5 flex items-center justify-between"><div><h3 className="text-sm font-semibold">Journey checklist</h3><p className="mt-1 text-[10px] text-black/40">Owners are notified automatically when a task becomes active.</p></div><Badge variant="outline" className="text-[9px]">{person.date}</Badge></div>
-            <div className="space-y-2">{taskSeed.map((task) => { const Icon = task.icon; const done = person.id === 'maya' ? completedTasks.includes(task.id) : task.done; return <label key={task.id} className={`flex cursor-pointer items-start gap-3 rounded-xl border p-3.5 transition ${task.blocked && !done && person.id === 'maya' ? 'border-[#f0d5b1] bg-[#fff9ef]' : 'border-black/[0.06] bg-white hover:border-black/15'}`}><Checkbox checked={done} onCheckedChange={(checked) => person.id === 'maya' && onToggleTask(task.id, checked === true)} disabled={person.id !== 'maya'} className="mt-0.5" /><div className={`grid size-8 shrink-0 place-items-center rounded-lg ${done ? 'bg-[#edf8f0] text-[#288048]' : 'bg-[#f3f2ef] text-black/40'}`}><Icon className="size-4" /></div><div className="min-w-0 flex-1"><div className="flex items-start justify-between gap-3"><p className={`text-xs font-semibold ${done ? 'text-black/40 line-through' : ''}`}>{task.title}</p>{task.blocked && !done && person.id === 'maya' && <span className="shrink-0 rounded-full bg-[#f3a62f] px-2 py-0.5 text-[8px] font-bold uppercase text-white">Delayed</span>}</div><p className="mt-1 text-[9px] text-black/35">{task.owner} · {task.date}</p></div></label>; })}</div>
-            <div className="mt-5 grid grid-cols-2 gap-3"><button className="flex items-center gap-2 rounded-xl border border-black/[0.07] p-3 text-left"><Mail className="size-4 text-black/40" /><span><span className="block text-[10px] font-semibold">Send update</span><span className="mt-0.5 block text-[9px] text-black/35">Email stakeholders</span></span></button><button className="flex items-center gap-2 rounded-xl border border-black/[0.07] p-3 text-left"><Headphones className="size-4 text-black/40" /><span><span className="block text-[10px] font-semibold">Get help</span><span className="mt-0.5 block text-[9px] text-black/35">Contact support</span></span></button></div>
-          </div></>}
+      <DialogContent className="max-h-[94vh] gap-0 overflow-hidden rounded-[24px] p-0 sm:max-w-[900px]">
+        {person && <>
+          <div className="bg-[#23201f] px-6 pb-5 pt-7 text-white sm:px-7">
+            <DialogHeader><div className="flex items-start gap-4"><div className="grid size-12 shrink-0 place-items-center rounded-2xl bg-white/10 text-sm font-bold">{person.initials}</div><div className="min-w-0 flex-1"><DialogTitle className="text-xl text-white">{person.name}</DialogTitle><DialogDescription className="mt-1 text-white/45">{person.role} · {person.group}</DialogDescription><div className="mt-3 flex flex-wrap gap-2"><span className="rounded-full bg-white/10 px-2.5 py-1 text-xs font-medium text-white/70">ServiceNow demo</span><span className="rounded-full bg-white/10 px-2.5 py-1 text-xs font-medium text-white/70">Outlook demo</span></div></div><StatusBadge status={person.status} label={person.statusLabel} /></div></DialogHeader>
+          </div>
+
+          <Tabs defaultValue="overview" className="min-h-0 flex-1 gap-0">
+            <div className="border-b border-black/[0.06] bg-white px-5 sm:px-7">
+              <TabsList variant="line" className="h-12 w-full justify-start gap-5">
+                <TabsTrigger value="overview" className="flex-none px-1 text-xs sm:text-sm">Journey</TabsTrigger>
+                <TabsTrigger value="access" className="flex-none px-1 text-xs sm:text-sm">Access & codes <span className="rounded-full bg-[#edf5ff] px-1.5 py-0.5 text-[10px] text-[#326a9d]">3</span></TabsTrigger>
+                <TabsTrigger value="devices" className="flex-none px-1 text-xs sm:text-sm">Devices {updateCount > 0 && <span className="rounded-full bg-[#fff2dc] px-1.5 py-0.5 text-[10px] text-[#9b5c00]">{updateCount}</span>}</TabsTrigger>
+              </TabsList>
+            </div>
+
+            <div className="max-h-[calc(94vh-205px)] overflow-y-auto bg-[#f7f7f5]">
+              <TabsContent value="overview" className="p-5 sm:p-7">
+                <div className="mb-5 flex items-center justify-between"><div><h3 className="text-base font-semibold">Journey checklist</h3><p className="mt-1 text-xs text-black/45">Owners are notified automatically when a task becomes active.</p></div><Badge variant="outline" className="text-xs">{person.date}</Badge></div>
+                <div className="mb-5 rounded-2xl border border-black/[0.06] bg-white p-4"><div className="mb-2 flex justify-between text-xs"><span className="font-semibold text-black/60">Journey progress</span><span className="text-black/40">{person.id === 'maya' ? progress : person.progress}% complete</span></div><Progress value={person.id === 'maya' ? progress : person.progress} className="[&_[data-slot=progress-track]]:h-2 [&_[data-slot=progress-track]]:bg-black/[0.06] [&_[data-slot=progress-indicator]]:bg-[#ec111a]" /></div>
+                <div className="space-y-2">{taskSeed.map((task) => { const Icon = task.icon; const done = person.id === 'maya' ? completedTasks.includes(task.id) : task.done; return <label key={task.id} className={`flex cursor-pointer items-start gap-3 rounded-xl border p-3.5 transition ${task.blocked && !done && person.id === 'maya' ? 'border-[#f0d5b1] bg-[#fff9ef]' : 'border-black/[0.06] bg-white hover:border-black/15'}`}><Checkbox checked={done} onCheckedChange={(checked) => person.id === 'maya' && onToggleTask(task.id, checked === true)} disabled={person.id !== 'maya'} className="mt-0.5" /><div className={`grid size-8 shrink-0 place-items-center rounded-lg ${done ? 'bg-[#edf8f0] text-[#288048]' : 'bg-[#f3f2ef] text-black/40'}`}><Icon className="size-4" /></div><div className="min-w-0 flex-1"><div className="flex items-start justify-between gap-3"><p className={`text-xs font-semibold ${done ? 'text-black/40 line-through' : ''}`}>{task.title}</p>{task.blocked && !done && person.id === 'maya' && <span className="shrink-0 rounded-full bg-[#f3a62f] px-2 py-0.5 text-[10px] font-bold uppercase text-white">Delayed</span>}</div><p className="mt-1 text-xs text-black/35">{task.owner} · {task.date}</p></div></label>; })}</div>
+              </TabsContent>
+
+              <TabsContent value="access" className="p-5 sm:p-7">
+                <div className="mb-5 flex flex-col justify-between gap-3 sm:flex-row sm:items-end"><div><h3 className="text-base font-semibold">Software access & activation</h3><p className="mt-1 text-xs text-black/45">ServiceNow requests and activation messages gathered into one view.</p></div><Button onClick={() => flash('Demo: a new ServiceNow software request would open here.')} className="h-9 self-start rounded-xl bg-[#ec111a] px-3 text-xs"><Plus /> Request software</Button></div>
+
+                <div className="mb-5 grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-2xl border border-black/[0.06] bg-white p-4"><div className="flex items-center justify-between"><span className="flex items-center gap-2 text-xs font-semibold"><TicketCheck className="size-4 text-[#ec111a]" /> ServiceNow</span><span className="rounded-full bg-[#edf8f0] px-2 py-1 text-[10px] font-semibold text-[#288048]">Simulated sync</span></div><p className="mt-3 text-xs leading-relaxed text-black/45">Creates catalogue requests and returns ticket status to this profile.</p></div>
+                  <div className="rounded-2xl border border-black/[0.06] bg-white p-4"><div className="flex items-center justify-between"><span className="flex items-center gap-2 text-xs font-semibold"><Mail className="size-4 text-[#326a9d]" /> Outlook</span><span className="rounded-full bg-[#edf5ff] px-2 py-1 text-[10px] font-semibold text-[#326a9d]">Simulated listener</span></div><p className="mt-3 text-xs leading-relaxed text-black/45">Detects approved licence emails and associates them with the request.</p></div>
+                </div>
+
+                <div className="mb-5 flex items-start gap-3 rounded-2xl border border-[#f0d5b1] bg-[#fff9ef] p-4"><LockKeyhole className="mt-0.5 size-4 shrink-0 text-[#9b5c00]" /><div><p className="text-xs font-semibold text-[#704500]">Demo values only</p><p className="mt-1 text-xs leading-relaxed text-[#704500]/70">In production, codes would be encrypted, expire automatically, and only the employee could reveal them after signing in again. Managers would see status only.</p></div></div>
+
+                <div className="space-y-3">{accessItems.map((item) => { const revealed = revealedCodes.includes(item.id); return <article key={item.id} className="rounded-2xl border border-black/[0.06] bg-white p-4"><div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h4 className="text-sm font-semibold">{item.product}</h4><span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${item.ready ? 'bg-[#edf8f0] text-[#288048]' : 'bg-[#fff2dc] text-[#9b5c00]'}`}>{item.state}</span></div><p className="mt-1 text-xs text-black/40">{item.request} · Source: {item.source}</p></div><span className="text-xs text-black/35">{item.expires}</span></div>{item.ready ? <div className="mt-4 flex flex-col gap-2 rounded-xl bg-[#f7f7f5] p-3 sm:flex-row sm:items-center"><div className="min-w-0 flex-1"><p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-black/35">{item.kind}</p><code className="mt-1 block truncate text-sm font-semibold tracking-wide text-black/75">{revealed ? item.value : '•••• •••• ••••'}</code></div><div className="flex gap-2"><Button type="button" variant="outline" onClick={() => toggleCode(item.id)} className="h-8 rounded-lg bg-white px-3 text-xs">{revealed ? <EyeOff /> : <Eye />} {revealed ? 'Hide' : 'Reveal'}</Button>{revealed && <Button type="button" variant="outline" onClick={() => copyDemoCode(item.value, item.product)} className="h-8 rounded-lg bg-white px-3 text-xs"><Copy /> Copy</Button>}</div></div> : <div className="mt-4 flex items-center gap-2 rounded-xl bg-[#fff9ef] p-3 text-xs text-[#704500]"><AlertTriangle className="size-4" /> Waiting for manager approval in ServiceNow.</div>}</article>; })}</div>
+              </TabsContent>
+
+              <TabsContent value="devices" className="p-5 sm:p-7">
+                <div className="mb-5 flex flex-col justify-between gap-3 sm:flex-row sm:items-end"><div><h3 className="text-base font-semibold">Assigned technology</h3><p className="mt-1 text-xs text-black/45">Device inventory and operating-system compliance for {person.name}.</p></div><span className={`w-fit rounded-full px-3 py-1.5 text-xs font-semibold ${updateCount ? 'bg-[#fff2dc] text-[#9b5c00]' : 'bg-[#edf8f0] text-[#288048]'}`}>{updateCount ? `${updateCount} updates required` : 'All devices current'}</span></div>
+
+                <div className="mb-5 flex items-start gap-3 rounded-2xl border border-black/[0.06] bg-white p-4"><RefreshCw className="mt-0.5 size-4 shrink-0 text-[#326a9d]" /><div><p className="text-xs font-semibold">Device data is simulated</p><p className="mt-1 text-xs leading-relaxed text-black/45">A live version would sync asset ownership from ServiceNow CMDB and update status from the bank’s endpoint-management platform.</p></div></div>
+
+                <div className="space-y-3">{devices.map((device) => { const Icon = device.icon; const reminded = remindedDevices.includes(device.id); return <article key={device.id} className={`rounded-2xl border bg-white p-4 ${device.update ? 'border-[#f0d5b1]' : 'border-black/[0.06]'}`}><div className="flex items-start gap-3"><div className={`grid size-10 shrink-0 place-items-center rounded-xl ${device.update ? 'bg-[#fff2dc] text-[#9b5c00]' : 'bg-[#edf8f0] text-[#288048]'}`}><Icon className="size-5" /></div><div className="min-w-0 flex-1"><div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-start"><div><h4 className="text-sm font-semibold">{device.name}</h4><p className="mt-1 text-xs text-black/40">Asset {device.asset} · {device.checked}</p></div><span className={`w-fit rounded-full px-2.5 py-1 text-[10px] font-semibold ${device.update ? 'bg-[#fff2dc] text-[#9b5c00]' : 'bg-[#edf8f0] text-[#288048]'}`}>{device.update ? 'Update required' : 'Up to date'}</span></div><div className="mt-4 grid gap-2 rounded-xl bg-[#f7f7f5] p-3 sm:grid-cols-[1fr_auto_1fr] sm:items-center"><div><p className="text-[10px] uppercase tracking-[0.08em] text-black/35">Installed</p><p className="mt-1 text-xs font-semibold">{device.current}</p></div><span className="hidden text-black/20 sm:block">→</span><div><p className="text-[10px] uppercase tracking-[0.08em] text-black/35">Required</p><p className="mt-1 text-xs font-semibold">{device.latest}</p></div></div>{device.update && <div className="mt-3 flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><p className="text-xs leading-relaxed text-black/45">Ask {person.name.split(' ')[0]} to connect to VPN, install the update, and restart the device.</p><Button type="button" variant={reminded ? 'secondary' : 'outline'} disabled={reminded} onClick={() => remind(device.id, device.name)} className="h-9 self-start rounded-xl bg-white px-3 text-xs"><Send /> {reminded ? 'Reminder prepared' : 'Send Outlook reminder'}</Button></div>}</div></div></article>; })}</div>
+              </TabsContent>
+            </div>
+          </Tabs>
+
+          {profileNotice && <div role="status" className="absolute bottom-5 left-1/2 z-20 w-[min(420px,calc(100%-2rem))] -translate-x-1/2 rounded-xl bg-[#1c1b1a] px-4 py-3 text-center text-xs font-medium text-white shadow-xl">{profileNotice}</div>}
+        </>}
       </DialogContent>
     </Dialog>
   );
