@@ -5,7 +5,9 @@ import {
   ArrowLeft,
   ArrowRight,
   Bell,
+  Building2,
   Boxes,
+  BriefcaseBusiness,
   CalendarDays,
   Check,
   CheckCircle2,
@@ -13,20 +15,24 @@ import {
   CircleAlert,
   Clock3,
   FileCheck2,
+  Headset,
   Headphones,
   HelpCircle,
   KeyRound,
   Laptop,
   LayoutDashboard,
   Mail,
+  Monitor,
   PackageCheck,
   Plus,
   Search,
+  Save,
   Settings,
   ShieldCheck,
   Sparkles,
   TicketCheck,
   UserMinus,
+  UserCog,
   UserRoundCheck,
   Users,
   X,
@@ -49,6 +55,29 @@ import { Progress } from '@/components/ui/progress';
 
 type Section = 'overview' | 'people' | 'profiles' | 'timeline';
 type JourneyType = 'onboarding' | 'offboarding';
+
+type RoleProfile = {
+  title: string;
+  role?: string;
+  area: string;
+  tasks: number;
+  groups: number;
+  ready: boolean;
+  icon?: typeof Boxes;
+  manager?: string;
+  hardware?: string;
+};
+
+type ProfileDraft = {
+  profileName: string;
+  businessLine: string;
+  manager: string;
+  specificRole: string;
+  laptop: string;
+  headset: boolean;
+  software: string[];
+  access: string[];
+};
 
 type Person = {
   id: string;
@@ -81,7 +110,29 @@ const taskSeed = [
   { id: 'welcome', title: 'First-week plan and team welcome', owner: 'Manager · you', date: 'Due Oct 11', done: false, icon: CalendarDays },
 ];
 
-const roleProfiles = [
+const businessLines = [
+  'Canadian Banking',
+  'International Banking',
+  'Global Wealth Management',
+  'Global Banking and Markets',
+  'Enterprise Functions & Strategy',
+  'Global Risk Management',
+  'Global Finance',
+  'Global Operations',
+];
+
+const softwareOptions = [
+  'Copilot Premium',
+  'Microsoft 365',
+  'Jira',
+  'IntelliJ IDEA',
+  'MATLAB',
+  'Bloomberg Terminal',
+];
+
+const accessOptions = ['ScotiaID', 'PIN', 'VPN access', 'Contract'];
+
+const roleProfiles: RoleProfile[] = [
   { title: 'Software Engineer', area: 'Canadian Banking', tasks: 18, groups: 6, ready: true, icon: Boxes },
   { title: 'Data Analyst', area: 'Solutions Architecture', tasks: 15, groups: 4, ready: true, icon: FileCheck2 },
   { title: 'Business Analyst', area: 'Canadian Banking', tasks: 14, groups: 3, ready: true, icon: Users },
@@ -91,6 +142,8 @@ const roleProfiles = [
 export default function Home() {
   const [section, setSection] = useState<Section>('overview');
   const [createOpen, setCreateOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [customProfiles, setCustomProfiles] = useState<RoleProfile[]>([]);
   const [journeyType, setJourneyType] = useState<JourneyType>('onboarding');
   const [detail, setDetail] = useState<Person | null>(null);
   const [search, setSearch] = useState('');
@@ -114,6 +167,24 @@ export default function Home() {
 
   function toggleTask(id: string, checked: boolean) {
     setCompletedTasks((current) => checked ? [...new Set([...current, id])] : current.filter((task) => task !== id));
+  }
+
+  function saveRoleProfile(profile: ProfileDraft) {
+    const itemCount = 1 + Number(profile.headset) + profile.software.length + profile.access.length;
+    setCustomProfiles((current) => [{
+      title: profile.profileName,
+      role: profile.specificRole,
+      area: profile.businessLine,
+      tasks: itemCount,
+      groups: profile.access.length,
+      ready: true,
+      icon: FileCheck2,
+      manager: profile.manager,
+      hardware: profile.headset ? `${profile.laptop} · Jabra Evolve2 50` : profile.laptop,
+    }, ...current]);
+    setProfileOpen(false);
+    setNotice(`${profile.profileName} role profile saved.`);
+    window.setTimeout(() => setNotice(''), 3600);
   }
 
   const detailProgress = Math.round((completedTasks.length / taskSeed.length) * 100);
@@ -142,12 +213,19 @@ export default function Home() {
             />
           )}
           {section === 'people' && <PeopleView people={filteredPeople} onOpenPerson={setDetail} onCreate={() => setCreateOpen(true)} />}
-          {section === 'profiles' && <ProfilesView onCreate={() => { setJourneyType('onboarding'); setCreateOpen(true); }} />}
+          {section === 'profiles' && (
+            <ProfilesView
+              customProfiles={customProfiles}
+              onNewProfile={() => setProfileOpen(true)}
+              onUseProfile={() => { setJourneyType('onboarding'); setCreateOpen(true); }}
+            />
+          )}
           {section === 'timeline' && <TimelineView onOpenPerson={setDetail} />}
         </div>
       </section>
 
       <JourneyDialog open={createOpen} onOpenChange={setCreateOpen} type={journeyType} onType={setJourneyType} onSubmit={launchJourney} />
+      <RoleProfileDialog open={profileOpen} onOpenChange={setProfileOpen} onSave={saveRoleProfile} />
       <PersonDialog person={detail} onClose={() => setDetail(null)} completedTasks={completedTasks} onToggleTask={toggleTask} progress={detailProgress} />
 
       {notice && (
@@ -259,12 +337,13 @@ function PeopleView({ people, onOpenPerson, onCreate }: { people: Person[]; onOp
   );
 }
 
-function ProfilesView({ onCreate }: { onCreate: () => void }) {
+function ProfilesView({ customProfiles, onNewProfile, onUseProfile }: { customProfiles: RoleProfile[]; onNewProfile: () => void; onUseProfile: () => void }) {
+  const profiles = [...customProfiles, ...roleProfiles];
   return (
     <>
-      <PageHeading eyebrow="Role profiles" title="Define it once. Reuse it every time." description="Role profiles turn institutional knowledge into a repeatable checklist with clear owners and timing." action={<Button onClick={onCreate} className="h-10 rounded-xl bg-[#ec111a] px-4 text-xs"><Plus /> New profile</Button>} />
+      <PageHeading eyebrow="Role profiles" title="Define it once. Reuse it every time." description="Role profiles package the hardware, software licences, and Scotia access a specific role needs." action={<Button onClick={onNewProfile} className="h-10 rounded-xl bg-[#ec111a] px-4 text-xs"><Plus /> New profile</Button>} />
       <div className="mb-5 rounded-[20px] border border-[#f2d4d5] bg-[#fff7f7] px-5 py-4 sm:flex sm:items-center sm:justify-between"><div className="flex items-start gap-3"><Sparkles className="mt-0.5 size-4 text-[#ec111a]" /><div><p className="text-xs font-semibold">Suggested improvement</p><p className="mt-1 text-[11px] text-black/45">The Software Developer profile is missing an equipment lead time. Add 10 business days to prevent late deliveries.</p></div></div><button className="mt-3 text-[11px] font-semibold text-[#c80d15] sm:mt-0">Review suggestion <ArrowRight className="ml-1 inline size-3" /></button></div>
-      <div className="grid gap-4 md:grid-cols-2">{roleProfiles.map((profile) => { const Icon = profile.icon; return <article key={`${profile.title}-${profile.area}`} className="group rounded-[22px] border border-black/[0.06] bg-white p-6 transition hover:-translate-y-0.5 hover:shadow-xl hover:shadow-black/[0.04]"><div className="flex items-start justify-between"><div className="grid size-11 place-items-center rounded-2xl bg-[#f1efec] text-black/60"><Icon className="size-5" /></div><Badge variant="outline" className={`text-[9px] ${profile.ready ? 'border-[#d4e8d9] bg-[#f0f8f2] text-[#288048]' : 'border-[#f0ddba] bg-[#fff6e6] text-[#9b5c00]'}`}>{profile.ready ? 'Ready to use' : 'Needs review'}</Badge></div><h3 className="mt-5 text-lg font-semibold tracking-tight">{profile.title}</h3><p className="mt-1 text-xs text-black/40">{profile.area}</p><div className="mt-6 flex gap-6 border-t border-black/[0.06] pt-4"><div><p className="text-sm font-semibold">{profile.tasks}</p><p className="mt-1 text-[10px] text-black/35">Checklist tasks</p></div><div><p className="text-sm font-semibold">{profile.groups}</p><p className="mt-1 text-[10px] text-black/35">Permission groups</p></div><button onClick={onCreate} className="ml-auto self-end text-[11px] font-semibold text-black/50 transition group-hover:text-black">Use profile <ArrowRight className="ml-1 inline size-3" /></button></div></article>; })}</div>
+      <div className="grid gap-4 md:grid-cols-2">{profiles.map((profile, index) => { const Icon = profile.icon ?? FileCheck2; return <article key={`${profile.title}-${profile.area}-${index}`} className="group rounded-[22px] border border-black/[0.06] bg-white p-6 transition hover:-translate-y-0.5 hover:shadow-xl hover:shadow-black/[0.04]"><div className="flex items-start justify-between"><div className="grid size-11 place-items-center rounded-2xl bg-[#f1efec] text-black/60"><Icon className="size-5" /></div><Badge variant="outline" className={`text-[9px] ${profile.ready ? 'border-[#d4e8d9] bg-[#f0f8f2] text-[#288048]' : 'border-[#f0ddba] bg-[#fff6e6] text-[#9b5c00]'}`}>{profile.ready ? 'Ready to use' : 'Needs review'}</Badge></div><h3 className="mt-5 text-lg font-semibold tracking-tight">{profile.title}</h3><p className="mt-1 text-xs text-black/40">{profile.role ? `${profile.role} · ` : ''}{profile.area}</p>{profile.manager && <p className="mt-3 text-xs text-black/45">Managed by <span className="font-semibold text-black/65">{profile.manager}</span></p>}{profile.hardware && <p className="mt-1 truncate text-xs text-black/35">{profile.hardware}</p>}<div className="mt-6 flex gap-6 border-t border-black/[0.06] pt-4"><div><p className="text-sm font-semibold">{profile.tasks}</p><p className="mt-1 text-[10px] text-black/35">Profile items</p></div><div><p className="text-sm font-semibold">{profile.groups}</p><p className="mt-1 text-[10px] text-black/35">Access items</p></div><button onClick={onUseProfile} className="ml-auto self-end text-[11px] font-semibold text-black/50 transition group-hover:text-black">Use profile <ArrowRight className="ml-1 inline size-3" /></button></div></article>; })}</div>
     </>
   );
 }
@@ -321,6 +400,101 @@ function JourneyDialog({ open, onOpenChange, type, onType, onSubmit }: { open: b
       </DialogContent>
     </Dialog>
   );
+}
+
+function RoleProfileDialog({ open, onOpenChange, onSave }: { open: boolean; onOpenChange: (open: boolean) => void; onSave: (profile: ProfileDraft) => void }) {
+  const [laptop, setLaptop] = useState('MacBook M1');
+  const [headset, setHeadset] = useState(true);
+  const [software, setSoftware] = useState<string[]>(['Microsoft 365']);
+  const [access, setAccess] = useState<string[]>(['ScotiaID', 'PIN', 'VPN access', 'Contract']);
+
+  function toggleSelection(item: string, selected: boolean, current: string[], update: (items: string[]) => void) {
+    update(selected ? [...new Set([...current, item])] : current.filter((value) => value !== item));
+  }
+
+  function submitProfile(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    onSave({
+      profileName: String(form.get('profileName')),
+      businessLine: String(form.get('businessLine')),
+      manager: String(form.get('manager')),
+      specificRole: String(form.get('specificRole')),
+      laptop,
+      headset,
+      software,
+      access,
+    });
+  }
+
+  const totalItems = 1 + Number(headset) + software.length + access.length;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[94vh] gap-0 overflow-hidden rounded-[24px] p-0 sm:max-w-[760px]">
+        <form onSubmit={submitProfile}>
+          <DialogHeader className="border-b border-black/[0.06] px-6 pb-5 pt-6 sm:px-7">
+            <div className="mb-3 grid size-11 place-items-center rounded-2xl bg-[#fff0f0] text-[#ec111a]"><BriefcaseBusiness className="size-5" /></div>
+            <DialogTitle className="text-xl font-semibold tracking-tight">Create a role profile</DialogTitle>
+            <DialogDescription>Define the standard equipment, licences, and Scotia access every person in this role should receive.</DialogDescription>
+          </DialogHeader>
+
+          <div className="max-h-[calc(94vh-210px)] space-y-7 overflow-y-auto px-6 py-6 sm:px-7">
+            <section>
+              <SectionHeading icon={<Building2 />} title="Role details" description="Name the reusable profile and identify who owns it." />
+              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                <Field label="Profile name"><Input required name="profileName" placeholder="e.g. Canadian Banking Engineer" className="h-10 rounded-xl bg-white" /></Field>
+                <Field label="Business line"><NativeSelect name="businessLine" className="w-full [&_select]:h-10 [&_select]:rounded-xl">{businessLines.map((line) => <NativeSelectOption key={line} value={line}>{line}</NativeSelectOption>)}</NativeSelect></Field>
+                <Field label="Manager name"><Input required name="manager" defaultValue="Jordan Wallace" className="h-10 rounded-xl bg-white" /></Field>
+                <Field label="Specific role"><Input required name="specificRole" placeholder="e.g. Software Engineer" className="h-10 rounded-xl bg-white" /></Field>
+              </div>
+            </section>
+
+            <section>
+              <SectionHeading icon={<Monitor />} title="Hardware" description="Choose the standard laptop and headset for this role." />
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <label className="rounded-2xl border border-black/[0.07] bg-[#faf9f7] p-4">
+                  <span className="flex items-center gap-2 text-xs font-semibold"><Laptop className="size-4 text-black/45" /> Laptop</span>
+                  <NativeSelect value={laptop} onChange={(event) => setLaptop(event.target.value)} className="mt-3 w-full [&_select]:h-10 [&_select]:rounded-xl [&_select]:bg-white">
+                    <NativeSelectOption value="MacBook M1">MacBook M1</NativeSelectOption>
+                    <NativeSelectOption value="ThinkPad EOOSA00Q65Z">ThinkPad EOOSA00Q65Z</NativeSelectOption>
+                  </NativeSelect>
+                </label>
+                <label className={`flex cursor-pointer items-start gap-3 rounded-2xl border p-4 transition ${headset ? 'border-[#efbfc1] bg-[#fff7f7]' : 'border-black/[0.07] bg-[#faf9f7]'}`}>
+                  <Checkbox checked={headset} onCheckedChange={(checked) => setHeadset(checked === true)} className="mt-0.5" />
+                  <span><span className="flex items-center gap-2 text-xs font-semibold"><Headset className="size-4 text-black/45" /> Jabra Evolve2 50</span><span className="mt-2 block text-xs leading-relaxed text-black/45">Include the standard wired headset in this profile.</span></span>
+                </label>
+              </div>
+            </section>
+
+            <section>
+              <SectionHeading icon={<FileCheck2 />} title="Software licences" description="Select every paid or managed application required for the role." />
+              <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{softwareOptions.map((item) => { const selected = software.includes(item); return <label key={item} className={`flex cursor-pointer items-center gap-3 rounded-xl border px-3.5 py-3 transition ${selected ? 'border-[#efbfc1] bg-[#fff7f7]' : 'border-black/[0.07] bg-white hover:bg-black/[0.02]'}`}><Checkbox checked={selected} onCheckedChange={(checked) => toggleSelection(item, checked === true, software, setSoftware)} /><span className="text-xs font-medium">{item}</span></label>; })}</div>
+            </section>
+
+            <section>
+              <SectionHeading icon={<UserCog />} title="Scotia profile" description="Choose the identity and access items that should be created." />
+              <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">{accessOptions.map((item) => { const selected = access.includes(item); return <label key={item} className={`flex cursor-pointer items-center gap-3 rounded-xl border px-3.5 py-3 transition ${selected ? 'border-[#efbfc1] bg-[#fff7f7]' : 'border-black/[0.07] bg-white hover:bg-black/[0.02]'}`}><Checkbox checked={selected} onCheckedChange={(checked) => toggleSelection(item, checked === true, access, setAccess)} /><span className="text-xs font-medium">{item}</span></label>; })}</div>
+            </section>
+
+            <div className="flex items-center justify-between rounded-2xl bg-[#24201f] px-4 py-3.5 text-white">
+              <div><p className="text-xs font-semibold">Profile summary</p><p className="mt-1 text-xs text-white/50">{software.length} software licences · {access.length} Scotia access items</p></div>
+              <span className="rounded-full bg-white/10 px-3 py-1.5 text-xs font-semibold">{totalItems} items</span>
+            </div>
+          </div>
+
+          <DialogFooter className="mx-0 mb-0 rounded-none border-black/[0.06] bg-[#f7f7f5] px-6 py-4 sm:px-7">
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} className="h-10 rounded-xl bg-white px-4 text-xs">Cancel</Button>
+            <Button type="submit" className="h-10 rounded-xl bg-[#ec111a] px-4 text-xs hover:bg-[#c80d15]"><Save className="size-4" /> Save role profile</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function SectionHeading({ icon, title, description }: { icon: ReactNode; title: string; description: string }) {
+  return <div className="flex items-start gap-3"><span className="grid size-9 shrink-0 place-items-center rounded-xl bg-[#f2f0ed] text-black/50 [&_svg]:size-4">{icon}</span><div><h3 className="text-sm font-semibold">{title}</h3><p className="mt-1 text-xs leading-relaxed text-black/45">{description}</p></div></div>;
 }
 
 function PersonDialog({ person, onClose, completedTasks, onToggleTask, progress }: { person: Person | null; onClose: () => void; completedTasks: string[]; onToggleTask: (id: string, checked: boolean) => void; progress: number }) {
