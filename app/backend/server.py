@@ -1,5 +1,6 @@
 """Local ScotiaPath demo API. Python standard library only."""
 from contextlib import contextmanager
+from employee_emails import ensure_emails
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie
 from pathlib import Path
@@ -52,6 +53,11 @@ def initialize():
                 manager_id TEXT NOT NULL, employee_id TEXT NOT NULL, secret BLOB NOT NULL,
                 PRIMARY KEY (manager_id, employee_id)
             );
+            CREATE TABLE IF NOT EXISTS employee_emails (
+                manager_id TEXT NOT NULL, employee_id TEXT NOT NULL,
+                email TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                PRIMARY KEY (manager_id, employee_id)
+            );
             CREATE TABLE IF NOT EXISTS workspaces (
                 manager_id TEXT PRIMARY KEY, data TEXT NOT NULL
             );
@@ -80,6 +86,16 @@ def initialize():
         ]
         for message in messages:
             db.execute('INSERT OR IGNORE INTO onboarding_emails (id, manager_id, employee_id, employee_name, sender, subject, summary, body, received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', (message[0], 'jordan', *message[1:]))
+
+        for workspace in db.execute('SELECT manager_id, data FROM workspaces').fetchall():
+            try:
+                state = json.loads(workspace['data'])
+                if not isinstance(state, dict) or not isinstance(state.get('roster'), list):
+                    continue
+            except ValueError:
+                continue
+            state = ensure_emails(db, workspace['manager_id'], state, import_existing=True)
+            db.execute('UPDATE workspaces SET data=? WHERE manager_id=?', (json.dumps(state), workspace['manager_id']))
 
 
 def soft_token_code(secret, timestamp=None):
@@ -157,7 +173,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/demo/workspace':
             with connect() as db:
                 row = db.execute('SELECT data FROM workspaces WHERE manager_id=?', (account['id'],)).fetchone()
-            return self.reply(200, json.loads(row['data']) if row else None)
+                state = ensure_emails(db, account['id'], json.loads(row['data']), import_existing=True) if row else None
+                if state is not None:
+                    db.execute('UPDATE workspaces SET data=? WHERE manager_id=?', (json.dumps(state), account['id']))
+            return self.reply(200, state)
         self.reply(404, {'error': 'Endpoint not found.'})
 
     def do_POST(self):
@@ -211,14 +230,22 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/demo/workspace':
             if not isinstance(data.get('roster'), list) or not isinstance(data.get('tasks'), dict) or not isinstance(data.get('profiles'), list):
                 return self.reply(400, {'error': 'Invalid workspace data.'})
+            if any(not isinstance(person, dict) or not isinstance(person.get('id'), str) or not person['id'] for person in data['roster']):
+                return self.reply(400, {'error': 'Each employee must have an identity.'})
+            if len({person['id'] for person in data['roster']}) != len(data['roster']):
+                return self.reply(400, {'error': 'Duplicate employee records are not allowed.'})
             with connect() as db:
+                previous = db.execute('SELECT data FROM workspaces WHERE manager_id=?', (account['id'],)).fetchone()
+                if previous:
+                    ensure_emails(db, account['id'], json.loads(previous['data']), import_existing=True)
+                data = ensure_emails(db, account['id'], data)
                 allowed_tokens = [person.get('id') for person in data['roster'] if isinstance(person, dict) and person.get('softTokenEnabled') is True]
                 for token in db.execute('SELECT employee_id FROM soft_tokens WHERE manager_id=?', (account['id'],)).fetchall():
                     if token['employee_id'] not in allowed_tokens:
                         db.execute('DELETE FROM soft_tokens WHERE manager_id=? AND employee_id=?', (account['id'], token['employee_id']))
                 db.execute('INSERT INTO workspaces VALUES (?, ?) ON CONFLICT(manager_id) DO UPDATE SET data=excluded.data',
                            (account['id'], json.dumps(data)))
-            return self.reply(200, {'ok': True})
+            return self.reply(200, data)
         self.reply(404, {'error': 'Endpoint not found.'})
 
 

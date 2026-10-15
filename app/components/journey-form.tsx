@@ -5,11 +5,13 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { MANUAL_PROFILE, validateJourney, type JourneyFields } from '@/lib/journey-fields';
+import { previewEmployeeEmail } from '@/lib/employee-email';
 import { profileKey, type AccessProfile } from '@/lib/role-access';
 
-export function JourneyForm({open, onOpenChange, type, onType, profiles, selectedProfile, softwareOptions, accessOptions, businessAreas, managerFirstName, managerLastName, onSubmit}: {
+export function JourneyForm({employees, open, onOpenChange, type, onType, profiles, selectedProfile, softwareOptions, accessOptions, businessAreas, managerFirstName, managerLastName, onSubmit}: {
+  employees: {id: string; sid?: string; eid?: string; email?: string}[];
   open: boolean; onOpenChange: (open: boolean) => void; type: 'onboarding' | 'offboarding'; onType: (type: 'onboarding' | 'offboarding') => void;
   profiles: AccessProfile[]; selectedProfile: string; softwareOptions: string[]; accessOptions: string[]; businessAreas: string[];
   managerFirstName: string; managerLastName: string; onSubmit: (fields: JourneyFields) => Promise<void>;
@@ -20,6 +22,12 @@ export function JourneyForm({open, onOpenChange, type, onType, profiles, selecte
   const [software, setSoftware] = useState<string[]>([]), [access, setAccess] = useState<string[]>([]);
   const [softwareMode, setSoftwareMode] = useState(''), [accessMode, setAccessMode] = useState('');
   const [saving, setSaving] = useState(false), [error, setError] = useState('');
+  const [returning, setReturning] = useState(false);
+  const [firstName, setFirstName] = useState(''), [lastName, setLastName] = useState('');
+  const [sid, setSid] = useState(''), [eid, setEid] = useState('');
+  const needsIdentity = type === 'offboarding' || returning;
+  const existing = needsIdentity ? employees.find(person => person.sid?.toLowerCase() === sid.trim().toLowerCase() && person.eid === eid.trim()) : undefined;
+  const email = existing?.email || (firstName.trim() && lastName.trim() ? previewEmployeeEmail(firstName, lastName, employees) : '');
   const manual = profileId === MANUAL_PROFILE;
   function toggle(item: string, checked: boolean, items: string[], set: (value: string[]) => void) { set(checked ? [...new Set([...items,item])] : items.filter((value) => value !== item)); }
   async function submit(event: React.FormEvent<HTMLFormElement>) {
@@ -27,7 +35,7 @@ export function JourneyForm({open, onOpenChange, type, onType, profiles, selecte
     if (saving) return;
     const form = new FormData(event.currentTarget);
     const text = (key: string) => String(form.get(key) ?? '').trim();
-    const fields: JourneyFields = {firstName: text('firstName'), lastName: text('lastName'), email: text('email'), managerFirstName: text('managerFirstName'), managerLastName: text('managerLastName'), date: text('date'), sid: text('sid').toLowerCase(), eid: text('eid'), profileId, businessArea: area, jobTitle: text('jobTitle'), laptop: text('laptop'), headset: text('headset'), softwareMode, accessMode, software: softwareMode === 'assign' ? software : [], access: accessMode === 'assign' ? access : []};
+    const fields: JourneyFields = {firstName: text('firstName'), lastName: text('lastName'), email, returning: type === 'onboarding' && returning, managerFirstName: text('managerFirstName'), managerLastName: text('managerLastName'), date: text('date'), sid: text('sid').toLowerCase(), eid: text('eid'), profileId, businessArea: area, jobTitle: text('jobTitle'), laptop: text('laptop'), headset: text('headset'), softwareMode, accessMode, software: softwareMode === 'assign' ? software : [], access: accessMode === 'assign' ? access : []};
     setError('');
     try { validateJourney(fields, type, profiles.map(profileKey)); setSaving(true); await onSubmit(fields); }
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not save. Try again.'); }
@@ -39,13 +47,14 @@ export function JourneyForm({open, onOpenChange, type, onType, profiles, selecte
   return <Dialog open={open} onOpenChange={(value) => {if (!saving) onOpenChange(value);}}>
     <DialogContent showCloseButton={!saving} className="flex max-h-[94dvh] min-h-0 flex-col gap-0 overflow-hidden rounded-xl p-0 sm:max-w-[760px]">
       <form onSubmit={submit} aria-busy={saving} className="flex max-h-[94dvh] min-h-0 flex-col overflow-hidden">
-        <DialogHeader className="shrink-0 border-b border-black/10 px-6 py-5"><DialogTitle>{type === 'onboarding' ? 'Add onboarding' : 'Start offboarding'}</DialogTitle><DialogDescription>{type === 'onboarding' ? 'Use a role profile or set up one person manually.' : 'Enter the employee’s identity and last working day. No role profile is needed.'}</DialogDescription></DialogHeader>
+        <DialogHeader className="shrink-0 border-b border-black/10 px-6 py-5"><DialogTitle>{type === 'onboarding' ? 'Add onboarding' : 'Start offboarding'}</DialogTitle></DialogHeader>
         <div className="min-h-0 flex-1 space-y-6 overflow-y-auto p-6">
           <div role="group" aria-label="Journey type" className="grid grid-cols-2 gap-2">{(['onboarding','offboarding'] as const).map((item) => <button key={item} type="button" disabled={saving} aria-pressed={type === item} onClick={() => {onType(item); setError('');}} className={`min-h-11 rounded-lg border px-3 py-2 text-sm font-semibold capitalize ${type === item ? 'border-black bg-black text-white' : 'border-black/15 bg-white'}`}>{item}</button>)}</div>
+          {type === 'onboarding' && <label className="block space-y-2 text-sm font-medium"><span>Employment (required)</span><NativeSelect required disabled={saving} value={returning ? 'returning' : 'new'} onChange={event => setReturning(event.target.value === 'returning')} className="w-full bg-white"><NativeSelectOption value="new">New employee</NativeSelectOption><NativeSelectOption value="returning">Returning employee</NativeSelectOption></NativeSelect></label>}
           <div className="grid gap-4 sm:grid-cols-2">
-            {field('First name','firstName',{autoComplete:'given-name'})}{field('Last name','lastName',{autoComplete:'family-name'})}
-            {type === 'offboarding' && <>{field('SID (ScotiaID)','sid',{pattern:'[sS][0-9]{7}',maxLength:8,autoCapitalize:'none',spellCheck:false,placeholder:'s1234567'})}{field('EID (Employee ID)','eid',{pattern:'[0-9]{8}',maxLength:8,inputMode:'numeric',placeholder:'12345678'})}</>}
-            {field('Scotiabank email','email',{type:'email',autoComplete:'email',placeholder:'name@scotiabank.com'})}{field(type === 'onboarding' ? 'Start date' : 'Last working day','date',{type:'date'})}
+            {field('First name','firstName',{autoComplete:'given-name',value:firstName,onChange:event=>setFirstName(event.target.value)})}{field('Last name','lastName',{autoComplete:'family-name',value:lastName,onChange:event=>setLastName(event.target.value)})}
+            {needsIdentity && <>{field('SID (ScotiaID)','sid',{pattern:'[sS][0-9]{7}',maxLength:8,autoCapitalize:'none',spellCheck:false,placeholder:'s1234567',value:sid,onChange:event=>setSid(event.target.value)})}{field('EID (Employee ID)','eid',{pattern:'[0-9]{8}',maxLength:8,inputMode:'numeric',placeholder:'12345678',value:eid,onChange:event=>setEid(event.target.value)})}</>}
+            <label className="block space-y-2 text-sm font-medium"><span>Scotiabank email (automatic)</span><Input readOnly value={email} placeholder="Generated from their name" className="min-h-11 w-full rounded-lg bg-black/5" aria-describedby="email-allocation" /><span id="email-allocation" className="block text-xs font-normal text-black/70">{existing?.email ? 'Existing employee address.' : 'Preview. The unique address is confirmed when saved.'}</span></label>{field(type === 'onboarding' ? 'Start date' : 'Last working day','date',{type:'date'})}
             {field('Manager first name','managerFirstName',{defaultValue:managerFirstName,autoComplete:'off'})}{field('Manager last name','managerLastName',{defaultValue:managerLastName,autoComplete:'off'})}
             {type === 'onboarding' && <>
               <label className="block space-y-2 text-sm font-medium"><span>Role profile (required)</span><NativeSelect required disabled={saving} name="roleProfile" value={profileId} onChange={(event) => {const id=event.target.value;setProfileId(id);const selected=profiles.find((profile)=>profileKey(profile)===id);if(selected)setArea(selected.area);}} className="w-full bg-white"><NativeSelectOption value="" disabled>Choose a role profile</NativeSelectOption>{profiles.map((profile) => <NativeSelectOption key={profileKey(profile)} value={profileKey(profile)}>{profile.title}</NativeSelectOption>)}<NativeSelectOption value={MANUAL_PROFILE}>Custom / Other / Manual</NativeSelectOption></NativeSelect></label>

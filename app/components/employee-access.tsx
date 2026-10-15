@@ -2,24 +2,13 @@
 import { useEffect, useState } from 'react';
 import { Copy } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { getSoftToken, type SoftTokenCode } from '@/lib/demo-db';
 
-export function EmployeeIdentifiers({sid, eid, email, onSaveEmail}: {sid?: string; eid?: string; email?: string; onSaveEmail: (value: string) => Promise<void>}) {
+export function EmployeeIdentifiers({sid, eid, email}: {sid?: string; eid?: string; email?: string}) {
   const [notice, setNotice] = useState('');
-  const [editing, setEditing] = useState(false);
-  const [saving, setSaving] = useState(false);
   async function copy(label: string, value: string) {
     try { await navigator.clipboard.writeText(value); setNotice(`${label} copied.`); }
     catch { setNotice('Could not copy. Select the value and copy it manually.'); }
-  }
-  async function save(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const value = String(new FormData(event.currentTarget).get('email')).trim();
-    setSaving(true); setNotice('');
-    try { await onSaveEmail(value); setEditing(false); setNotice('Scotiabank email saved.'); }
-    catch (reason) { setNotice(reason instanceof Error ? reason.message : 'Could not save email.'); }
-    finally { setSaving(false); }
   }
   return <section aria-label="Employee identifiers" className="mb-6 rounded-lg border border-black/10 bg-white p-4">
     <h3 className="text-sm font-semibold">Employee details</h3><p className="mt-1 text-xs text-black/70">Select a field to copy it.</p>
@@ -28,7 +17,6 @@ export function EmployeeIdentifiers({sid, eid, email, onSaveEmail}: {sid?: strin
         <span className="min-w-0"><span className="block text-xs text-black/70">{label}</span><span className="mt-1 block select-text break-all text-sm font-semibold">{value || 'Not set'}</span></span><Copy aria-hidden="true" className="size-4 shrink-0 text-black/60" />
       </button>)}
     </div>
-    {editing ? <form onSubmit={save} className="mt-4 space-y-3"><label className="block text-sm">Scotiabank email<Input name="email" type="email" autoComplete="off" required defaultValue={email} className="mt-2 w-full" /></label><div className="flex gap-3"><Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save email'}</Button><Button type="button" variant="outline" disabled={saving} onClick={() => setEditing(false)}>Cancel</Button></div></form> : <button type="button" onClick={() => {setEditing(true); setNotice('');}} className="mt-2 min-h-11 text-xs font-semibold underline underline-offset-4">{email ? 'Edit email' : 'Set Scotiabank email'}</button>}
     <p role="status" className="mt-2 text-xs text-black/70">{notice}</p>
   </section>;
 }

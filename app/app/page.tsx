@@ -1,4 +1,5 @@
 'use client';
+import { previewEmployeeEmail, reconcileEmails } from '@/lib/employee-email';
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
@@ -104,6 +105,7 @@ type Person = {
   laptop?: string;
   headset?: boolean;
   onboardingTaskHistory?: string[];
+  journeyHistory?: {type: JourneyType; date?: string; role: string; completedTasks: string[]; complete: boolean}[];
   initials: string;
   role: string;
   group: string;
@@ -190,7 +192,6 @@ function Workspace({ manager, onSignOut }: { manager: Manager; onSignOut: () => 
   const [selectedProfile, setSelectedProfile] = useState('software-engineer');
   const [storageReady, setStorageReady] = useState(false);
   const [canSave, setCanSave] = useState(false);
-  const employeeUpdatePending = useRef(false);
   const headingRef = useRef<HTMLDivElement>(null);
   const [storageWarning, setStorageWarning] = useState('');
 
@@ -216,7 +217,7 @@ function Workspace({ manager, onSignOut }: { manager: Manager; onSignOut: () => 
     if (!storageReady || !canSave) return;
     let active = true;
     saveWorkspace(manager.id, {roster, tasks: taskProgress, profiles: customProfiles.map(({icon, ...profile}) => profile)})
-      .then(() => { if (active) setStorageWarning(''); })
+      .then((saved) => { if (active) { setStorageWarning(''); setRoster(current => reconcileEmails(current, saved.roster)); } })
       .catch((reason: unknown) => { if (active) setStorageWarning(reason instanceof Error ? reason.message : 'Changes could not be saved.'); });
     return () => { active = false; };
   }, [manager.id, roster, taskProgress, customProfiles, storageReady, canSave]);
@@ -251,21 +252,20 @@ function Workspace({ manager, onSignOut }: { manager: Manager; onSignOut: () => 
     validateJourney(fields, journeyType, profiles.map(profileKey));
     const name = fullName(fields.firstName, fields.lastName);
     const managerName = fullName(fields.managerFirstName, fields.managerLastName);
-    const email = fields.email.trim();
     const sid = fields.sid.trim().toLowerCase(), eid = fields.eid.trim();
     let existing: Person | undefined;
-    if (journeyType === 'offboarding') {
+    if (journeyType === 'offboarding' || fields.returning) {
       const bySid = roster.find((person) => person.sid?.toLowerCase() === sid);
       const byEid = roster.find((person) => person.eid === eid);
       if (bySid || byEid) {
         if (!bySid || !byEid || bySid.id !== byEid.id) throw new Error('SID and EID must match the same employee.');
         existing = bySid;
         if (existing.name.trim().replace(/\s+/g, ' ').toLowerCase() !== name.toLowerCase()) throw new Error('The name does not match this employee. Check the identity fields.');
-        if (existing.email && existing.email.trim().toLowerCase() !== email.toLowerCase()) throw new Error('The email does not match this employee. Update their email before starting offboarding.');
-        if (existing.type === 'offboarding') throw new Error('This employee already has an offboarding checklist. Open their existing card.');
+        if (existing.type === journeyType) throw new Error(`This employee already has an ${journeyType} checklist. Open their existing card.`);
       }
+      if (fields.returning && !existing) throw new Error('No employee matches this SID and EID. Check their details or choose New employee.');
     }
-    if (roster.some((person) => person.id !== existing?.id && person.email?.toLowerCase() === email.toLowerCase())) throw new Error('This email already belongs to another employee. Check the existing record.');
+    const email = existing?.email || previewEmployeeEmail(fields.firstName, fields.lastName, roster);
     const id = existing?.id ?? crypto.randomUUID();
     const dateISO = fields.date;
     let person: Person = {
@@ -277,6 +277,10 @@ function Workspace({ manager, onSignOut }: { manager: Manager; onSignOut: () => 
       type: journeyType, progress: 0, status: journeyType === 'offboarding' ? 'offboarding' : 'track', statusLabel: journeyType === 'offboarding' ? 'Offboarding' : 'On track',
       next: journeyType === 'offboarding' ? 'Confirm departure date and HR records' : 'Offer and employee profile confirmed', blockedTasks: [],
     };
+    if (existing) {
+      const previousTasks = taskProgress[id] ?? tasksFor(existing).filter(task => task.done).map(task => task.id);
+      person.journeyHistory = [...(existing.journeyHistory ?? []), {type: existing.type, date: existing.dateISO, role: existing.role, completedTasks: [...previousTasks], complete: tasksFor(existing).every(task => previousTasks.includes(task.id))}];
+    }
     if (journeyType === 'offboarding') {
       person.sid = sid; person.eid = eid;
       if (!existing) { person.laptop = 'None'; person.headset = false; }
@@ -291,8 +295,8 @@ function Workspace({ manager, onSignOut }: { manager: Manager; onSignOut: () => 
     const updatedRoster = existing ? roster.map((item) => item.id === id ? person : item) : [person, ...roster];
     const identified = assignEmployeeIds(updatedRoster);
     const updatedTasks = {...taskProgress, [id]: []};
-    await saveWorkspace(manager.id, {roster: identified, tasks: updatedTasks, profiles: customProfiles.map(({icon, ...profile}) => profile)});
-    setRoster(identified); setTaskProgress(updatedTasks); setCreateOpen(false); navigate('people');
+    const saved = await saveWorkspace(manager.id, {roster: identified, tasks: updatedTasks, profiles: customProfiles.map(({icon, ...profile}) => profile)});
+    setRoster(saved.roster); setTaskProgress(updatedTasks); setCreateOpen(false); navigate('people');
     setNotice(`${journeyType === 'onboarding' ? 'Onboarding' : 'Offboarding'} created for ${name}.`);
   }
 
@@ -322,23 +326,12 @@ function Workspace({ manager, onSignOut }: { manager: Manager; onSignOut: () => 
     const nextRoster = roster.filter((person) => person.id !== activeDetail.id);
     const nextTasks = {...taskProgress};
     delete nextTasks[activeDetail.id];
-    await saveWorkspace(manager.id, {roster: nextRoster, tasks: nextTasks, profiles: customProfiles.map(({icon, ...profile}) => profile)});
-    setRoster(nextRoster);
+    const saved = await saveWorkspace(manager.id, {roster: nextRoster, tasks: nextTasks, profiles: customProfiles.map(({icon, ...profile}) => profile)});
+    setRoster(saved.roster);
     setTaskProgress(nextTasks);
     setDetail(null);
     setNotice(`${activeDetail.name} was removed after completed offboarding.`);
     navigate('people');
-  }
-
-  async function updateEmployee(patch: {email?: string}) {
-    if (!activeDetail || !canSave) throw new Error('The database is unavailable. Try again.');
-    if (employeeUpdatePending.current) throw new Error('Wait for the current change to finish saving.');
-    employeeUpdatePending.current = true;
-    try {
-      const updated = roster.map((person) => person.id === activeDetail.id ? {...person, ...patch} : person);
-      await saveWorkspace(manager.id, {roster: updated, tasks: taskProgress, profiles: customProfiles.map(({icon, ...profile}) => profile)});
-      setRoster(updated);
-    } finally { employeeUpdatePending.current = false; }
   }
 
   async function saveRoleProfile(profile: ProfileDraft, applyExisting: boolean) {
@@ -354,8 +347,8 @@ function Workspace({ manager, onSignOut }: { manager: Manager; onSignOut: () => 
     };
     const saved = customProfiles.some((item) => profileKey(item) === updated.id) ? customProfiles.map((item) => profileKey(item) === updated.id ? updated : item) : [...customProfiles, updated];
     const updatedRoster = editingProfile && applyExisting ? roster.map((person) => profileFor(person, profiles) && profileKey(profileFor(person, profiles)!) === profileKey(editingProfile) ? inheritProfile(person, updated) : person) : roster;
-    await saveWorkspace(manager.id, {roster: updatedRoster, tasks: taskProgress, profiles: saved.map(({icon, ...item}) => item)});
-    setCustomProfiles(saved); setRoster(updatedRoster); setProfileOpen(false); setEditingProfile(null);
+    const persisted = await saveWorkspace(manager.id, {roster: updatedRoster, tasks: taskProgress, profiles: saved.map(({icon, ...item}) => item)});
+    setCustomProfiles(saved); setRoster(persisted.roster); setProfileOpen(false); setEditingProfile(null);
     setNotice(`${profile.profileName} role profile saved.${editingProfile && applyExisting ? ' Assigned employees updated.' : ''}`);
   }
 
@@ -405,9 +398,9 @@ function Workspace({ manager, onSignOut }: { manager: Manager; onSignOut: () => 
         </div>
       </section>
 
-      <JourneyForm key={`${createOpen}-${selectedProfile}`} profiles={profiles} selectedProfile={selectedProfile} open={createOpen} onOpenChange={setCreateOpen} type={journeyType} onType={setJourneyType} onSubmit={launchJourney} softwareOptions={softwareOptions} accessOptions={accessOptions} businessAreas={[...businessLines, 'Solutions Architecture', 'Global Technology']} managerFirstName={splitName(manager.name).firstName} managerLastName={splitName(manager.name).lastName} />
+      <JourneyForm employees={roster} key={`${createOpen}-${selectedProfile}`} profiles={profiles} selectedProfile={selectedProfile} open={createOpen} onOpenChange={setCreateOpen} type={journeyType} onType={setJourneyType} onSubmit={launchJourney} softwareOptions={softwareOptions} accessOptions={accessOptions} businessAreas={[...businessLines, 'Solutions Architecture', 'Global Technology']} managerFirstName={splitName(manager.name).firstName} managerLastName={splitName(manager.name).lastName} />
       <RoleProfileDialog key={`${editingProfile ? profileKey(editingProfile) : 'new'}-${profileOpen}`} initialProfile={editingProfile} open={profileOpen} onOpenChange={setProfileOpen} onSave={saveRoleProfile} />
-      <PersonDialog key={detail?.id ?? 'closed'} person={activeDetail} onClose={() => setDetail(null)} completedTasks={completedTasks} onToggleTask={toggleTask} onToggleBlocker={toggleBlocker} onRemove={removePerson} onUpdateEmployee={updateEmployee} progress={detailProgress} />
+      <PersonDialog key={detail?.id ?? 'closed'} person={activeDetail} onClose={() => setDetail(null)} completedTasks={completedTasks} onToggleTask={toggleTask} onToggleBlocker={toggleBlocker} onRemove={removePerson} progress={detailProgress} />
 
       {notice && (
         <div role="status" className="fixed bottom-4 left-4 right-4 z-[70] flex max-w-sm sm:left-auto items-center gap-3 rounded-xl border border-black/10 bg-[#1c1b1a] px-4 py-3.5 text-sm font-medium text-white shadow-2xl shadow-black/20">
@@ -704,7 +697,7 @@ function canRemovePerson(person: Person, completed: string[]) {
   return person.type === 'offboarding' && tasksFor(person).every((task) => completed.includes(task.id));
 }
 
-function PersonDialog({ person, onClose, completedTasks, onToggleTask, onToggleBlocker, onRemove, onUpdateEmployee, progress }: { person: Person | null; onClose: () => void; completedTasks: string[]; onToggleTask: (id: string, checked: boolean) => void; onToggleBlocker: (id: string, flagged: boolean) => void; onRemove: () => Promise<void>; onUpdateEmployee: (patch: {email?: string}) => Promise<void>; progress: number }) {
+function PersonDialog({ person, onClose, completedTasks, onToggleTask, onToggleBlocker, onRemove, progress }: { person: Person | null; onClose: () => void; completedTasks: string[]; onToggleTask: (id: string, checked: boolean) => void; onToggleBlocker: (id: string, flagged: boolean) => void; onRemove: () => Promise<void>; progress: number }) {
   const [confirmRemoval, setConfirmRemoval] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [removeError, setRemoveError] = useState('');
@@ -781,7 +774,8 @@ function PersonDialog({ person, onClose, completedTasks, onToggleTask, onToggleB
 
             <div className="max-h-[calc(94dvh-205px)] overflow-y-auto bg-[#f7f7f5]">
               <TabsContent value="overview" className="p-6">
-                <EmployeeIdentifiers sid={person.sid} eid={person.eid} email={person.email} onSaveEmail={(email) => onUpdateEmployee({email})} />
+                <EmployeeIdentifiers sid={person.sid} eid={person.eid} email={person.email} />
+                {!!person.journeyHistory?.length && <details className="mb-6 rounded-lg border border-black/10 bg-white p-4"><summary className="min-h-11 cursor-pointer text-sm font-semibold">Previous journeys ({person.journeyHistory.length})</summary><ul className="space-y-3 border-t border-black/10 pt-3">{person.journeyHistory.map((journey, index) => <li key={index} className="text-sm"><span className="font-semibold capitalize">{journey.type}</span> · {journey.date || 'Date not recorded'}<p className="mt-1 text-black/70">{journey.role} · {journey.complete ? 'Complete' : `${journey.completedTasks.length} tasks completed`}</p></li>)}</ul></details>}
                 <div className="mb-6 flex items-center justify-between"><div><h3 className="text-base font-semibold">Journey checklist</h3><p className="mt-1 text-sm text-black/70">Check off completed tasks. Changes are saved in SQLite.</p></div><Badge variant="outline" className="text-sm">{person.date}</Badge></div>
                 <div className="mb-5 rounded-xl border border-black/[0.06] bg-white p-4"><div className="mb-2 flex justify-between text-sm"><span className="font-semibold text-black/70">Journey progress</span><span className="text-black/70">{progress}% complete</span></div><Progress aria-label="Journey completion" value={progress} className="[&_[data-slot=progress-track]]:h-2 [&_[data-slot=progress-track]]:bg-black/[0.06] [&_[data-slot=progress-indicator]]:bg-[#ec111a]" /></div>
                 <div className="space-y-2">{tasksFor(person).map((task) => { const Icon = task.icon; const done = completedTasks.includes(task.id); return <div key={task.id} className={`flex items-start gap-3 rounded-lg border p-3.5 transition ${task.blocked && !done ? 'border-[#f0d5b1] bg-[#fff9ef]' : 'border-black/[0.06] bg-white hover:border-black/15'}`}><Checkbox disabled={removing} aria-label={`Mark ${task.title} complete`} checked={done} onCheckedChange={(checked) => onToggleTask(task.id, checked === true)} className="mt-0.5" /><div className={`grid size-8 shrink-0 place-items-center rounded-lg ${done ? 'bg-[#edf8f0] text-[#288048]' : 'bg-[#f3f2ef] text-black/70'}`}><Icon aria-hidden="true" className="size-4" /></div><div className="min-w-0 flex-1"><div className="flex items-start justify-between gap-3"><p className={`text-sm font-semibold ${done ? 'text-black/70 line-through' : ''}`}>{task.title}</p>{task.blocked && !done && <span className="shrink-0 rounded-md bg-[#fff2dc] px-2 py-0.5 text-xs font-bold uppercase text-[#704500]">Blocked</span>}</div><p className="mt-1 text-sm text-black/70">{task.owner} · {task.date}</p>{!done && <button type="button" disabled={removing} aria-pressed={task.blocked} onClick={() => onToggleBlocker(task.id, !task.blocked)} className="mt-2 min-h-11 text-xs font-semibold underline underline-offset-4">{task.blocked ? 'Clear blocker' : 'Flag blocker'}</button>}</div></div>; })}</div>
