@@ -21,7 +21,7 @@ our goal is to reduce repeated work and make missing steps easier to spot from t
 
 - view team readiness based on average checklist completion
 - see how many journeys are complete or still in progress
-- scroll through open blockers below the readiness bar
+- scroll through blockers overdue tasks and upcoming deadlines below the readiness bar
 - open a blocker to go straight to that employee
 - review active onboarding journeys and the next task for each person
 
@@ -32,10 +32,46 @@ our goal is to reduce repeated work and make missing steps easier to spot from t
 - filter completed journeys and work still in progress
 - open each employee to see their tasks access and devices
 - check off tasks and flag or clear blockers
+- edit journey dates and individual task due dates
 - keep completed onboarding visible until another journey is started
 
 onboarding covers offer confirmation background checks equipment access and the welcome plan
 offboarding covers departure records handover equipment returns and access removal
+
+### edit dates and catch late tasks 📅
+
+open an employee then choose **tasks → edit dates**
+change the start date or last working day and adjust any task due dates
+choose **save dates** to store the changes in sqlite
+completed tasks and employee identity stay the same
+
+changing the journey date resets the form to a suggested schedule
+managers can adjust each due date before saving or cancel to keep the existing dates
+
+| task | suggested due date |
+| --- | --- |
+| offer and employee profile | 10 working days before the start date |
+| background check | 5 working days before the start date |
+| equipment delivery | 2 working days before the start date |
+| vpn and access | 1 working day before the start date |
+| welcome plan | on the start date |
+| departure records | 10 working days before the last working day |
+| handover | 1 working day before the last working day |
+| equipment return and access removal | on the last working day |
+
+working day offsets skip weekends but do not include public holidays
+these are suggested planning dates rather than company policy
+
+- **important** means an incomplete task is past its due date
+- **warning** means an incomplete task is due today or within the next three calendar days
+- completed tasks have no deadline alert
+
+alerts appear in the checklist employee status and overview
+the attention count includes overdue tasks tasks due soon and other blocked tasks
+the breakdown shows each group and the row scrolls horizontally
+blockers remain separate and a task can be both blocked and overdue
+past dates stay past dates until the manager changes them or completes the task
+the app checks the local calendar date every minute and when the tab becomes active
 
 ### use a role profile or a custom setup
 
@@ -50,6 +86,36 @@ managers can create a profile edit it later and use it when adding employees
 for a unique job choose **custom / other / manual** during onboarding
 this lets the manager set up one employee without adding another reusable profile
 forms require all needed fields including a clear choice when no equipment software or access is needed
+
+### manage linked tickets 🎫
+
+open **tickets** in the main navigation or open an employee and choose their **tickets** tab
+
+requests are created from the employee's assigned laptop headset software and access
+manual setups use their own assignments and an employee with no assigned item gets no request for that item
+offboarding creates equipment return software licence recovery and account removal requests
+
+- filter by employee status or current and previous journeys
+- search by request id employee item or assigned team
+- update the status from submitted through approval work and completion
+- review who changed a status and when
+- see important and warning deadline flags
+
+all tickets for a linked checklist item must be completed before that item is complete
+marking a checklist item complete also completes its linked tickets
+reopening a completed ticket reopens the linked item
+reopening a checklist item returns its completed tickets to submitted
+progress counts the checklist item once rather than counting its tickets again
+
+editing a task deadline updates linked ticket deadlines
+role assignment changes create new requests and retire removed ones
+adding software or access can reopen the access task because there is new work to finish
+
+previous journeys and removed assignments stay in ticket history
+historical tickets cannot be edited and completed employee records keep their progress when tickets are first added
+removing an employee keeps ticket history for review
+
+these are local request records and do not send work to real it teams or servicenow
 
 ### keep employee identity consistent
 
@@ -133,8 +199,10 @@ vite forwards them to the python server
 python reads and writes sqlite through its built in `sqlite3` module
 no pip packages or separate database account are needed
 
-sqlite stores manager accounts sessions workspace data email read status generated addresses and soft token secrets
+sqlite stores manager accounts sessions workspace data email read status generated addresses soft token secrets tickets and ticket events
 people role profiles and task progress are saved as a json workspace for each manager
+tickets and their events use linked tables in the same database
+each journey has its own id so a returning employee keeps their identity while receiving fresh tickets
 
 client saves are queued in order
 the server returns saved data including its final email assignments
@@ -144,11 +212,23 @@ passwords are stored as salted pbkdf2 hashes
 sessions use hashed tokens stored in sqlite with an eight hour expiry and an httponly cookie
 signing out invalidates the session
 
-### work from the merged ticket branch
+### ticket api
 
-the repository also includes drizzle orm a cloudflare d1 schema sql migrations and api routes for workspaces journeys tasks and tickets
-the current manager interface uses python and local sqlite
-the d1 ticket routes are separate and are not connected to that interface or its saved records
+the current interface uses the python api for tickets and checklist changes
+
+| route | purpose |
+| --- | --- |
+| `get /api/demo/workspace` | load the saved workspace and tickets |
+| `post /api/demo/workspace` | save changes and sync linked tickets |
+| `get /api/demo/tickets` | read the manager's ticket records and history |
+| `post /api/demo/tickets/status` | change a status and sync checklist progress |
+
+ticket writes and checklist updates happen in one sqlite transaction
+requests are checked against the signed in manager and stale status edits are rejected
+
+older drizzle and cloudflare d1 files remain from the merged branch
+they are not used by the current interface and their separate routes do not share the local sqlite records
+no d1 migration or extra install is needed for the connected ticket feature
 
 ## 🚀 run it locally
 
@@ -211,7 +291,7 @@ app/
   app/                 main page layout styles and api routes
   components/          forms login emails and shared ui
   lib/                 api client identity and role helpers
-  backend/             python api and integration tests
+  backend/             python api ticket sync and integration tests
     data/              local sqlite database created at runtime
   scripts/             development launcher
   db/                  separate drizzle schema and d1 service
@@ -225,13 +305,16 @@ from the `app` folder
 
 ```sh
 npx tsc --noEmit
+node scripts/test-journey-dates.mjs
+node scripts/test-ticket-client.mjs
 npm run build
 python3 -m unittest discover -s backend -p 'test_*.py'
 ```
 
 on windows replace `python3` with `python`
 
-the python tests cover sign in sessions request validation saved workspaces email uniqueness migration and soft token permissions
+the python tests cover sign in sessions request validation saved workspaces email uniqueness migration soft token permissions saved journey dates ticket creation status history role changes and task sync
+the date tests cover working day schedules overdue and warning boundaries invalid dates and saves that preserve task progress
 
 ## 🛠 challenges and lessons
 
@@ -251,14 +334,14 @@ the website can reload while an older python process keeps running
 response validation shows a restart message when that server returns an older response format
 
 **bringing branches together**
-the sqlite interface and d1 ticket workflow use different data models
-we kept the employee flow intact with separate ticket routes
-connecting them is future work
+the sqlite interface and d1 ticket workflow used different data models
+we connected ticket behavior to the existing python api and sqlite database
+journey ids preserve request history while sid and eid preserve the employee identity
 
 ## 🌱 what comes next
 
 - connect real email and service request systems
-- connect the ticket workflow to the manager interface through one data model
+- add request attachments comments and more detailed approval rules
 - add company single sign on and stronger permission checks
 - add an audit log for important employee and access changes
 - test accessibility with more users and assistive tools

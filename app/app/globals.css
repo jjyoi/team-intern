@@ -103,7 +103,7 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--primary); outli
 .mobile-nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; padding-block: 1rem; background: #fff; border-bottom: 1px solid #ddd; }
 .mobile-nav button { padding: .5rem; border-radius: .5rem; color: #3b3b3b; font-size: .875rem; }
 .mobile-nav button[aria-current="page"] { background: #191919; color: #fff; font-weight: 600; }
-@media (min-width: 640px) { .mobile-nav { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+@media (min-width: 640px) { .mobile-nav { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
 @media (min-width: 1024px) { .mobile-nav { display: none; } }
 [data-slot="dialog-close"] { min-width: 44px; min-height: 44px; background: #fff; color: #191919; border: 1px solid #ddd; }
 [data-slot="dialog-header"] { padding-right: 3.5rem; }

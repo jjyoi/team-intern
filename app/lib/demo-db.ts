@@ -1,3 +1,4 @@
+import type { TicketWorkspace, TicketStatus } from '@/lib/tickets';
 /** Client for the local Python + SQLite demo API. */
 export type Manager = { id: string; name: string; email: string; sid: string };
 export const DEMO_SID = 's1234567';
@@ -34,17 +35,18 @@ export async function loadWorkspace<T>(managerId: string): Promise<T | undefined
   return legacy ? JSON.parse(legacy) as T : undefined;
 }
 let pendingWorkspaceSave: Promise<unknown> = Promise.resolve();
-export async function saveWorkspace<T>(_managerId: string, state: T): Promise<T> {
+export async function saveWorkspace<T>(_managerId: string, state: T): Promise<T & TicketWorkspace> {
   const snapshot = JSON.parse(JSON.stringify(state));
   const next = pendingWorkspaceSave.catch(() => {}).then(async () => {
     const saved = await request<unknown>('workspace', snapshot);
     if (!saved || typeof saved !== 'object' ||
         !Array.isArray((saved as {roster?: unknown}).roster) ||
         !(saved as {tasks?: unknown}).tasks || typeof (saved as {tasks?: unknown}).tasks !== 'object' ||
-        !Array.isArray((saved as {profiles?: unknown}).profiles)) {
+        !Array.isArray((saved as {profiles?: unknown}).profiles) ||
+        !Array.isArray((saved as {tickets?: unknown}).tickets)) {
       throw new Error('The database server is running an older version. In the terminal running the app, press Ctrl+C, run npm run dev again, then refresh this page.');
     }
-    return saved as T;
+    return saved as T & TicketWorkspace;
   });
   pendingWorkspaceSave = next;
   return next;
@@ -60,4 +62,10 @@ export async function markEmailRead(id: string): Promise<void> { await request('
 export type SoftTokenCode = {code: string; expires_at: number; server_time: number};
 export function getSoftToken(employeeId: string): Promise<SoftTokenCode> {
   return request(`soft-token?employee_id=${encodeURIComponent(employeeId)}`);
+}
+
+export async function updateTicket<T>(id: string, status: TicketStatus, expectedStatus: string): Promise<T & TicketWorkspace> {
+  const next = pendingWorkspaceSave.catch(() => {}).then(() => request<T & TicketWorkspace>('tickets/status', {id,status,expected_status:expectedStatus}));
+  pendingWorkspaceSave = next;
+  return next;
 }

@@ -93,7 +93,7 @@ class ApiTests(unittest.TestCase):
         server.initialize()  # Starting again retains the account, sessions, and records.
         self.assertEqual(self.request('workspace', cookie=cookie)[1], state)
         with server.connect() as db:
-            self.assertEqual(json.loads(db.execute('SELECT data FROM workspaces').fetchone()[0]), state)
+            self.assertEqual(json.loads(db.execute('SELECT data FROM workspaces').fetchone()[0]), {key:value for key,value in state.items() if key != 'tickets'})
 
     def test_generated_emails_are_unique_stable_and_server_controlled(self):
         cookie = self.login()
@@ -139,7 +139,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(addresses[0], 'existing@scotiabank.com')
         self.assertEqual(len(set(addresses)), 4)
         self.assertTrue(all(address.endswith('@scotiabank.com') for address in addresses))
-        self.assertEqual(saved['tasks'], legacy['tasks'])
+        self.assertEqual(saved['tasks']['one'], legacy['tasks']['one'])
         with server.connect() as db:
             other = server.ensure_emails(db, 'another-manager', {'roster': [{'id': 'four', 'name': 'Sam Lee'}]})
         self.assertEqual(other['roster'][0]['email'], 'sam.lee2@scotiabank.com')
@@ -148,6 +148,149 @@ class ApiTests(unittest.TestCase):
         cookie = self.login()
         state = {'roster': [{'id': 'one'}, {'id': 'one'}], 'tasks': {}, 'profiles': []}
         self.assertEqual(self.request('workspace', state, cookie)[0], 400)
+
+    def test_journey_date_edits_and_task_progress_persist(self):
+        cookie = self.login()
+        state = {'roster': [{'id': 'employee', 'name': 'Taylor Morgan', 'type': 'onboarding',
+            'sid': 's7654321', 'eid': '12345678', 'dateISO': '2026-11-02',
+            'taskDueDates': {'offer': '2026-10-19', 'background': '2026-10-26', 'equipment': '2026-10-29', 'access': '2026-10-30', 'welcome': '2026-11-02'}}],
+            'tasks': {'employee': ['offer', 'background']}, 'profiles': []}
+        status, saved, _ = self.request('workspace', state, cookie)
+        self.assertEqual(status, 200)
+        server.initialize()
+        loaded = self.request('workspace', cookie=cookie)[1]
+        self.assertEqual(loaded, saved)
+        self.assertEqual(loaded['tasks']['employee'], ['offer', 'background'])
+        self.assertEqual(loaded['roster'][0]['dateISO'], '2026-11-02')
+        self.assertEqual(loaded['roster'][0]['taskDueDates']['access'], '2026-10-30')
+        self.assertEqual(loaded['roster'][0]['sid'], 's7654321')
+
+    def ticket_workspace(self, cookie):
+        state = {'roster': [{'id':'taylor','name':'Taylor Morgan','sid':'s7654321','eid':'12345678',
+            'type':'onboarding','dateISO':'2026-10-19','laptop':'MacBook M1','headset':False,
+            'software':['Jira'],'access':['VPN access']}],
+            'tasks':{'taylor':['offer','background']},'profiles':[]}
+        status, saved, _ = self.request('workspace',state,cookie)
+        self.assertEqual(status,200)
+        return saved
+
+    def test_ticket_generation_is_assignment_based_and_idempotent(self):
+        cookie=self.login()
+        saved=self.ticket_workspace(cookie)
+        self.assertEqual(len(saved['tickets']),3)
+        self.assertEqual({t['item'] for t in saved['tickets']},{'MacBook M1','Jira','VPN access'})
+        self.assertTrue(all(t['status']=='Submitted' for t in saved['tickets']))
+        self.assertEqual(next(t for t in saved['tickets'] if t['task_id']=='equipment')['due_date'],'2026-10-15')
+        self.assertEqual(next(t for t in saved['tickets'] if t['item']=='Jira')['due_date'],'2026-10-16')
+        for _ in range(2):
+            _, saved_again, _=self.request('workspace',saved,cookie)
+            self.assertEqual(saved_again,saved)
+        server.initialize()
+        self.assertEqual(self.request('workspace',cookie=cookie)[1],saved)
+        self.assertEqual(self.request('tickets',cookie=cookie)[1],saved['tickets'])
+
+    def test_ticket_completion_and_checklist_sync_in_both_directions(self):
+        cookie=self.login();saved=self.ticket_workspace(cookie)
+        access=[t for t in saved['tickets'] if t['task_id']=='access']
+        status,saved,_=self.request('tickets/status',{'id':access[0]['id'],'status':'Completed'},cookie)
+        self.assertEqual(status,200)
+        self.assertNotIn('access',saved['tasks']['taylor'])
+        _,saved,_=self.request('tickets/status',{'id':access[1]['id'],'status':'Completed'},cookie)
+        self.assertIn('access',saved['tasks']['taylor'])
+        _,saved,_=self.request('tickets/status',{'id':access[0]['id'],'status':'In progress'},cookie)
+        self.assertNotIn('access',saved['tasks']['taylor'])
+        saved['tasks']['taylor'].append('access')
+        _,saved,_=self.request('workspace',saved,cookie)
+        self.assertTrue(all(t['status']=='Completed' for t in saved['tickets'] if t['task_id']=='access'))
+        saved['tasks']['taylor'].remove('access')
+        _,saved,_=self.request('workspace',saved,cookie)
+        self.assertTrue(all(t['status']=='Submitted' for t in saved['tickets'] if t['task_id']=='access'))
+        self.assertTrue(all(t['events'][-1]['actor']=='Jordan Wallace' for t in saved['tickets'] if t['task_id']=='access'))
+
+    def test_ticket_dates_follow_edits_without_resetting_completed_work(self):
+        cookie=self.login();saved=self.ticket_workspace(cookie)
+        ticket=saved['tickets'][0]
+        _,saved,_=self.request('tickets/status',{'id':ticket['id'],'status':'Completed'},cookie)
+        saved['roster'][0]['taskDueDates']={'equipment':'2026-10-20','access':'2026-10-21'}
+        _,saved,_=self.request('workspace',saved,cookie)
+        self.assertEqual({t['due_date'] for t in saved['tickets']},{'2026-10-20','2026-10-21'})
+        self.assertEqual(next(t for t in saved['tickets'] if t['id']==ticket['id'])['status'],'Completed')
+        self.assertTrue(any('Due date changed' in e['note'] for t in saved['tickets'] for e in t['events']))
+
+    def test_role_assignment_changes_retire_requests_and_reopen_access(self):
+        cookie=self.login();saved=self.ticket_workspace(cookie)
+        saved['tasks']['taylor'].append('access')
+        _,saved,_=self.request('workspace',saved,cookie)
+        jira=next(t for t in saved['tickets'] if t['item']=='Jira')
+        saved['roster'][0]['software']=['MATLAB']
+        _,saved,_=self.request('workspace',saved,cookie)
+        self.assertNotIn('access',saved['tasks']['taylor'])
+        retired=next(t for t in saved['tickets'] if t['id']==jira['id'])
+        self.assertFalse(retired['active']);self.assertEqual(retired['status'],'Cancelled')
+        new=next(t for t in saved['tickets'] if t['item']=='MATLAB')
+        self.assertTrue(new['active']);self.assertEqual(new['status'],'Submitted')
+        self.assertEqual(self.request('tickets/status',{'id':retired['id'],'status':'Completed'},cookie)[0],409)
+
+    def test_journey_transition_rehire_and_removal_keep_ticket_history(self):
+        cookie=self.login();saved=self.ticket_workspace(cookie)
+        old_ids={t['id'] for t in saved['tickets']}
+        person=saved['roster'][0];original_journey=person['journeyId'];email=person['email']
+        person['type']='offboarding';saved['tasks']['taylor']=[]
+        _,saved,_=self.request('workspace',saved,cookie)
+        self.assertNotEqual(saved['roster'][0]['journeyId'],original_journey)
+        self.assertEqual(len([t for t in saved['tickets'] if t['active']]),3)
+        self.assertTrue(all(not t['active'] for t in saved['tickets'] if t['id'] in old_ids))
+        offboard_journey=saved['roster'][0]['journeyId']
+        saved['roster'][0]['type']='onboarding';saved['tasks']['taylor']=[]
+        _,saved,_=self.request('workspace',saved,cookie)
+        self.assertNotEqual(saved['roster'][0]['journeyId'],offboard_journey)
+        self.assertEqual(saved['roster'][0]['email'],email)
+        self.assertEqual(saved['roster'][0]['sid'],'s7654321')
+        self.assertEqual(len([t for t in saved['tickets'] if t['active']]),3)
+        saved['roster']=[];saved['tasks']={}
+        _,saved,_=self.request('workspace',saved,cookie)
+        self.assertEqual(len(saved['tickets']),9)
+        self.assertTrue(all(not t['active'] for t in saved['tickets']))
+
+    def test_adding_first_assignment_reopens_a_previously_empty_access_task(self):
+        cookie=self.login()
+        state={'roster':[{'id':'unique','name':'Alex Chen','type':'onboarding','dateISO':'2026-10-19',
+            'laptop':'None','headset':False,'software':[],'access':[]}],
+            'tasks':{'unique':['offer','background','equipment','access','welcome']},'profiles':[]}
+        _,saved,_=self.request('workspace',state,cookie)
+        self.assertEqual(saved['tickets'],[])
+        saved['roster'][0]['software']=['Jira']
+        _,saved,_=self.request('workspace',saved,cookie)
+        self.assertEqual(len(saved['tickets']),1)
+        self.assertEqual(saved['tickets'][0]['status'],'Submitted')
+        self.assertNotIn('access',saved['tasks']['unique'])
+
+    def test_ticket_routes_enforce_auth_scope_validation_and_stale_updates(self):
+        self.assertEqual(self.request('tickets')[0],401)
+        self.assertEqual(self.request('tickets/status',{'id':'none','status':'Completed'})[0],401)
+        cookie=self.login();saved=self.ticket_workspace(cookie);ticket=saved['tickets'][0]
+        for status in ('Cancelled','invalid',[],None):
+            self.assertEqual(self.request('tickets/status',{'id':ticket['id'],'status':status},cookie)[0],400)
+        self.assertEqual(self.request('tickets/status',{'id':'missing','status':'Completed'},cookie)[0],404)
+        self.assertEqual(self.request('tickets/status',{'id':ticket['id'],'status':'Completed','expected_status':'Ready'},cookie)[0],409)
+        self.assertEqual(self.request('tickets/status',{'id':ticket['id'],'status':'Completed'},cookie,origin='https://example.com')[0],403)
+        with server.connect() as db:
+            db.execute("UPDATE journey_tickets SET manager_id='another-manager'")
+        self.assertEqual(self.request('tickets',cookie=cookie)[1],[])
+        self.assertEqual(self.request('tickets/status',{'id':ticket['id'],'status':'Completed'},cookie)[0],404)
+
+    def test_ticket_migration_keeps_preexisting_completed_journeys(self):
+        legacy={'roster':[{'id':'legacy','name':'Sam Lee','type':'onboarding','progress':100,
+            'date':'Starts Oct 19','software':['Jira'],'access':['VPN access'],'laptop':'None'}],
+            'tasks':{},'profiles':[]}
+        with server.connect() as db:
+            db.execute('INSERT INTO workspaces VALUES (?,?)',('jordan',json.dumps(legacy)))
+        server.initialize();cookie=self.login()
+        saved=self.request('workspace',cookie=cookie)[1]
+        self.assertEqual(len(saved['tasks']['legacy']),5)
+        self.assertTrue(all(t['status']=='Completed' for t in saved['tickets']))
+        server.initialize()
+        self.assertEqual(self.request('workspace',cookie=cookie)[1],saved)
 
     def test_sign_out_and_expired_session(self):
         cookie = self.login()

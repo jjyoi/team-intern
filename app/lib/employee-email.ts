@@ -7,15 +7,18 @@ export function previewEmployeeEmail(first: string, last: string, people: Pick<I
   while (used.has(`${stem}${number > 1 ? number : ''}@scotiabank.com`)) number++;
   return `${stem}${number > 1 ? number : ''}@scotiabank.com`;
 }
-export function reconcileEmails<T extends {id: string; email?: string}>(current: T[], saved?: T[] | null): T[] {
+export function reconcileEmails<T extends {id: string; email?: string; journeyId?: string}>(current: T[], saved?: T[] | null): T[] {
   if (!Array.isArray(saved)) return current;
-  const emails = new Map(saved.map(person => [person.id, person.email]));
+  const identities = new Map(saved.map(person => [person.id, person]));
   let changed = false;
   const next = current.map(person => {
-    const email = emails.get(person.id);
-    if (!email || email === person.email) return person;
+    const identity = identities.get(person.id);
+    if (!identity) return person;
+    const email = identity.email || person.email;
+    const journeyId = identity.journeyId || person.journeyId;
+    if (email === person.email && journeyId === person.journeyId) return person;
     changed = true;
-    return {...person, email};
+    return {...person, email, journeyId};
   });
   return changed ? next : current;
 }

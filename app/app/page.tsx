@@ -1,4 +1,9 @@
 'use client';
+import { TicketsPanel } from '@/components/tickets-panel';
+import type { JourneyTicket, TicketStatus, TicketWorkspace } from '@/lib/tickets';
+import { TaskAttentionList } from '@/components/task-attention-list';
+import { JourneyDateEditor } from '@/components/journey-date-editor';
+import { deadlineStatus, formatDate, journeyDate, localDate, taskDueDate, validateJourneyDates } from '@/lib/journey-dates';
 import { previewEmployeeEmail, reconcileEmails } from '@/lib/employee-email';
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -27,6 +32,7 @@ import {
   Send,
   ShieldCheck,
   Smartphone,
+  TicketCheck,
   UserMinus,
   UserCog,
   UserRoundCheck,
@@ -41,7 +47,7 @@ import { EmployeeIdentifiers, SoftTokenAccess } from '@/components/employee-acce
 import { assignEmployeeIds } from '@/lib/employee-identity';
 import { OnboardingEmails } from '@/components/onboarding-emails';
 import { ManagerLogin } from '@/components/manager-login';
-import { loadWorkspace, saveWorkspace, type Manager } from '@/lib/demo-db';
+import { loadWorkspace, saveWorkspace, updateTicket, type Manager } from '@/lib/demo-db';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -59,7 +65,7 @@ import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Progress } from '@/components/ui/progress';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
-type Section = 'overview' | 'people' | 'profiles' | 'timeline' | 'emails';
+type Section = 'overview' | 'people' | 'profiles' | 'timeline' | 'emails' | 'tickets';
 type JourneyType = 'onboarding' | 'offboarding';
 
 type RoleProfile = {
@@ -96,6 +102,7 @@ type ProfileDraft = {
 
 type Person = {
   id: string;
+  journeyId?: string;
   name: string;
   firstName?: string;
   lastName?: string;
@@ -111,11 +118,12 @@ type Person = {
   group: string;
   date: string;
   progress: number;
-  status: 'blocked' | 'track' | 'complete' | 'offboarding';
+  status: 'blocked' | 'track' | 'complete' | 'offboarding' | 'important' | 'warning';
   statusLabel: string;
   next: string;
   type: JourneyType;
   dateISO?: string;
+  taskDueDates?: Record<string, string>;
   email?: string;
   manager?: string;
   blockedTasks?: string[];
@@ -178,6 +186,16 @@ export default function Home() {
 }
 
 function Workspace({ manager, onSignOut }: { manager: Manager; onSignOut: () => void }) {
+  const [today, setToday] = useState(localDate);
+  useEffect(() => {
+    const refresh = () => setToday(localDate());
+    const timer = window.setInterval(refresh, 60000);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {window.clearInterval(timer);document.removeEventListener('visibilitychange', refresh);};
+  }, []);
+  const [tickets, setTickets] = useState<JourneyTicket[]>([]);
+  const [ticketBusy, setTicketBusy] = useState(false);
+  const ticketPending = useRef(false);
   const [section, setSection] = useState<Section>('overview');
   const [createOpen, setCreateOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -197,11 +215,12 @@ function Workspace({ manager, onSignOut }: { manager: Manager; onSignOut: () => 
 
   useEffect(() => {
     let active = true;
-    loadWorkspace<{roster: Person[]; tasks: Record<string, string[]>; profiles: RoleProfile[]}>(manager.id)
+    loadWorkspace<{roster: Person[]; tasks: Record<string, string[]>; profiles: RoleProfile[]} & Partial<TicketWorkspace>>(manager.id)
       .then((state) => {
         if (!active) return;
         setCanSave(true);
         if (!state) return;
+        setTickets(state.tickets ?? []);
         const savedProfiles = Array.isArray(state.profiles) ? state.profiles.filter((profile) => typeof profile.title === 'string' && typeof profile.area === 'string') : [];
         const knownProfiles = mergeProfiles(roleProfiles, savedProfiles);
         if (Array.isArray(state.roster) && state.roster.every((person) => typeof person.id === 'string' && typeof person.name === 'string' && typeof person.date === 'string' && typeof person.role === 'string' && typeof person.group === 'string')) setRoster(assignEmployeeIds(migrateAssignments(state.roster, knownProfiles)));
@@ -214,13 +233,13 @@ function Workspace({ manager, onSignOut }: { manager: Manager; onSignOut: () => 
   }, [manager.id]);
 
   useEffect(() => {
-    if (!storageReady || !canSave) return;
+    if (!storageReady || !canSave || ticketBusy) return;
     let active = true;
     saveWorkspace(manager.id, {roster, tasks: taskProgress, profiles: customProfiles.map(({icon, ...profile}) => profile)})
-      .then((saved) => { if (active) { setStorageWarning(''); setRoster(current => reconcileEmails(current, saved.roster)); } })
+      .then((saved) => { if (active) { setStorageWarning(''); setRoster(current => reconcileEmails(current, saved.roster)); setTickets(saved.tickets); setTaskProgress(current => JSON.stringify(current) === JSON.stringify(saved.tasks) ? current : saved.tasks); } })
       .catch((reason: unknown) => { if (active) setStorageWarning(reason instanceof Error ? reason.message : 'Changes could not be saved.'); });
     return () => { active = false; };
-  }, [manager.id, roster, taskProgress, customProfiles, storageReady, canSave]);
+  }, [manager.id, roster, taskProgress, customProfiles, storageReady, canSave, ticketBusy]);
 
   function navigate(next: Section) {
     setSection(next);
@@ -235,8 +254,10 @@ function Workspace({ manager, onSignOut }: { manager: Manager; onSignOut: () => 
     const progress = Math.round(done.length / tasks.length * 100);
     const blockerCount = tasks.filter((task) => task.blocked && !completed.includes(task.id)).length;
     const blocked = blockerCount > 0;
-    return {...person, progress, status: progress === 100 ? 'complete' as const : blocked ? 'blocked' as const : person.type === 'offboarding' ? 'offboarding' as const : 'track' as const,
-      statusLabel: progress === 100 ? 'Complete' : blocked ? `${blockerCount} ${blockerCount === 1 ? 'blocker' : 'blockers'}` : person.type === 'offboarding' ? 'Offboarding' : 'On track',
+    const overdue = tasks.filter(task => deadlineStatus(task.dueISO, completed.includes(task.id), today) === 'important').length;
+    const dueSoon = tasks.filter(task => deadlineStatus(task.dueISO, completed.includes(task.id), today) === 'warning').length;
+    return {...person, progress, status: progress === 100 ? 'complete' as const : overdue ? 'important' as const : blocked ? 'blocked' as const : dueSoon ? 'warning' as const : person.type === 'offboarding' ? 'offboarding' as const : 'track' as const,
+      statusLabel: progress === 100 ? 'Complete' : overdue ? `Important · ${overdue} overdue` : blocked ? `${blockerCount} ${blockerCount === 1 ? 'blocker' : 'blockers'}` : dueSoon ? `Warning · ${dueSoon} due soon` : person.type === 'offboarding' ? 'Offboarding' : 'On track',
       next: tasks.find((task) => !completed.includes(task.id))?.title ?? 'Journey complete'};
   });
   const activeDetail = detail ? visibleRoster.find((person) => person.id === detail.id) ?? detail : null;
@@ -245,9 +266,10 @@ function Workspace({ manager, onSignOut }: { manager: Manager; onSignOut: () => 
   const filteredPeople = useMemo(() => {
     const query = search.trim().toLowerCase();
     return query ? visibleRoster.filter((person) => `${person.name} ${person.role} ${person.group}`.toLowerCase().includes(query)) : visibleRoster;
-  }, [search, roster, taskProgress]);
+  }, [search, roster, taskProgress, today]);
 
   async function launchJourney(fields: JourneyFields) {
+    if (ticketPending.current) throw new Error('Wait for the ticket update to finish.');
     if (!canSave) throw new Error('The database is unavailable. Try again.');
     validateJourney(fields, journeyType, profiles.map(profileKey));
     const name = fullName(fields.firstName, fields.lastName);
@@ -269,11 +291,12 @@ function Workspace({ manager, onSignOut }: { manager: Manager; onSignOut: () => 
     const id = existing?.id ?? crypto.randomUUID();
     const dateISO = fields.date;
     let person: Person = {
-      ...existing, id, name, firstName: fields.firstName.trim(), lastName: fields.lastName.trim(),
+      ...existing, id, journeyId: crypto.randomUUID(), name, firstName: fields.firstName.trim(), lastName: fields.lastName.trim(),
       initials: `${fields.firstName.trim()[0]}${fields.lastName.trim()[0]}`.toUpperCase(),
       role: existing?.role ?? '', group: existing?.group ?? '', email, manager: managerName,
       managerFirstName: fields.managerFirstName.trim(), managerLastName: fields.managerLastName.trim(),
       dateISO, date: `${journeyType === 'onboarding' ? 'Starts' : 'Leaves'} ${new Date(dateISO + 'T12:00:00').toLocaleDateString('en-CA', {month: 'short', day: 'numeric', year: 'numeric'})}`,
+      taskDueDates: undefined,
       type: journeyType, progress: 0, status: journeyType === 'offboarding' ? 'offboarding' : 'track', statusLabel: journeyType === 'offboarding' ? 'Offboarding' : 'On track',
       next: journeyType === 'offboarding' ? 'Confirm departure date and HR records' : 'Offer and employee profile confirmed', blockedTasks: [],
     };
@@ -296,12 +319,23 @@ function Workspace({ manager, onSignOut }: { manager: Manager; onSignOut: () => 
     const identified = assignEmployeeIds(updatedRoster);
     const updatedTasks = {...taskProgress, [id]: []};
     const saved = await saveWorkspace(manager.id, {roster: identified, tasks: updatedTasks, profiles: customProfiles.map(({icon, ...profile}) => profile)});
-    setRoster(saved.roster); setTaskProgress(updatedTasks); setCreateOpen(false); navigate('people');
+    setRoster(saved.roster); setTaskProgress(saved.tasks); setTickets(saved.tickets); setCreateOpen(false); navigate('people');
     setNotice(`${journeyType === 'onboarding' ? 'Onboarding' : 'Offboarding'} created for ${name}.`);
   }
 
+  async function changeTicket(ticket: JourneyTicket, status: TicketStatus) {
+    if (!canSave) throw new Error('The database is unavailable. Try again.');
+    if (ticketPending.current) throw new Error('Wait for the current ticket update to finish.');
+    ticketPending.current = true; setTicketBusy(true);
+    try {
+      const saved = await updateTicket<{roster: Person[]; tasks: Record<string, string[]>; profiles: RoleProfile[]}>(ticket.id,status,ticket.status);
+      setRoster(saved.roster); setTaskProgress(saved.tasks); setTickets(saved.tickets);
+      setNotice('Ticket saved. Linked checklist progress updated.');
+    } finally {ticketPending.current = false;setTicketBusy(false);}
+  }
+
   function toggleTask(id: string, checked: boolean) {
-    if (!activeDetail) return;
+    if (!activeDetail || ticketPending.current) return;
     const person = activeDetail;
     setTaskProgress((current) => {
       const existing = current[person.id] ?? tasksFor(person).filter((task) => task.done).map((task) => task.id);
@@ -310,7 +344,7 @@ function Workspace({ manager, onSignOut }: { manager: Manager; onSignOut: () => 
   }
 
   function toggleBlocker(taskId: string, flagged: boolean) {
-    if (!activeDetail) return;
+    if (!activeDetail || ticketPending.current) return;
     setRoster((current) => current.map((person) => {
       if (person.id !== activeDetail.id) return person;
       const existing = person.blockedTasks ?? (person.id === 'maya' ? ['equipment'] : []);
@@ -318,7 +352,18 @@ function Workspace({ manager, onSignOut }: { manager: Manager; onSignOut: () => 
     }));
   }
 
+  async function updateJourneyDates(date: string, dates: Record<string, string>) {
+    if (ticketPending.current) throw new Error('Wait for the ticket update to finish.');
+    if (!activeDetail || !canSave) throw new Error('The database is unavailable. Try again.');
+    validateJourneyDates(activeDetail.type, date, dates);
+    const updated = roster.map(person => person.id === activeDetail.id ? {...person, dateISO: date, date: `${person.type === 'onboarding' ? 'Starts' : 'Leaves'} ${formatDate(date)}`, taskDueDates: {...dates}} : person);
+    const saved = await saveWorkspace(manager.id, {roster: updated, tasks: taskProgress, profiles: customProfiles.map(({icon, ...profile}) => profile)});
+    setRoster(saved.roster); setTickets(saved.tickets); setTaskProgress(saved.tasks);
+    setNotice(`Journey dates saved for ${activeDetail.name}.`);
+  }
+
   async function removePerson() {
+    if (ticketPending.current) throw new Error('Wait for the ticket update to finish.');
     if (!activeDetail) throw new Error('Choose a person first.');
     const completed = taskProgress[activeDetail.id] ?? tasksFor(activeDetail).filter((task) => task.done).map((task) => task.id);
     if (!canRemovePerson(activeDetail, completed)) throw new Error('Complete all offboarding tasks before removing this person.');
@@ -327,14 +372,14 @@ function Workspace({ manager, onSignOut }: { manager: Manager; onSignOut: () => 
     const nextTasks = {...taskProgress};
     delete nextTasks[activeDetail.id];
     const saved = await saveWorkspace(manager.id, {roster: nextRoster, tasks: nextTasks, profiles: customProfiles.map(({icon, ...profile}) => profile)});
-    setRoster(saved.roster);
-    setTaskProgress(nextTasks);
+    setRoster(saved.roster); setTickets(saved.tickets); setTaskProgress(saved.tasks);
     setDetail(null);
     setNotice(`${activeDetail.name} was removed after completed offboarding.`);
     navigate('people');
   }
 
   async function saveRoleProfile(profile: ProfileDraft, applyExisting: boolean) {
+    if (ticketPending.current) throw new Error('Wait for the ticket update to finish.');
     if (!canSave) throw new Error('The database is unavailable. Try again.');
     if ([profile.profileName, profile.businessLine, profile.specificRole, profile.managerFirstName, profile.managerLastName, profile.laptop].some((value) => !value.trim())) throw new Error('Complete every required profile field.');
     const itemCount = 1 + Number(profile.headset) + profile.software.length + profile.access.length;
@@ -348,7 +393,7 @@ function Workspace({ manager, onSignOut }: { manager: Manager; onSignOut: () => 
     const saved = customProfiles.some((item) => profileKey(item) === updated.id) ? customProfiles.map((item) => profileKey(item) === updated.id ? updated : item) : [...customProfiles, updated];
     const updatedRoster = editingProfile && applyExisting ? roster.map((person) => profileFor(person, profiles) && profileKey(profileFor(person, profiles)!) === profileKey(editingProfile) ? inheritProfile(person, updated) : person) : roster;
     const persisted = await saveWorkspace(manager.id, {roster: updatedRoster, tasks: taskProgress, profiles: saved.map(({icon, ...item}) => item)});
-    setCustomProfiles(saved); setRoster(persisted.roster); setProfileOpen(false); setEditingProfile(null);
+    setCustomProfiles(saved); setRoster(persisted.roster); setTickets(persisted.tickets); setTaskProgress(persisted.tasks); setProfileOpen(false); setEditingProfile(null);
     setNotice(`${profile.profileName} role profile saved.${editingProfile && applyExisting ? ' Assigned employees updated.' : ''}`);
   }
 
@@ -364,7 +409,7 @@ function Workspace({ manager, onSignOut }: { manager: Manager; onSignOut: () => 
 
       <section className="min-h-screen lg:pl-[236px]">
         <TopBar
-          searchMode={section === 'emails' ? 'emails' : section === 'profiles' ? 'roles' : 'people'}
+          searchMode={section === 'emails' ? 'emails' : section === 'profiles' ? 'roles' : section === 'tickets' ? 'tickets' : 'people'}
           onSignOut={onSignOut}
           search={search}
           onSearch={setSearch}
@@ -372,13 +417,14 @@ function Workspace({ manager, onSignOut }: { manager: Manager; onSignOut: () => 
         />
 
         <nav className="mobile-nav page-gutter lg:hidden" aria-label="Main navigation">
-          {(['overview', 'people', 'profiles', 'timeline', 'emails'] as const).map((item) => <button key={item} onClick={() => navigate(item)} aria-current={section === item ? 'page' : undefined}>{({overview: 'Overview', people: 'People', profiles: 'Role profiles', timeline: 'Timeline', emails: 'Emails'})[item]}</button>)}
+          {(['overview', 'people', 'profiles', 'timeline', 'emails', 'tickets'] as const).map((item) => <button key={item} onClick={() => navigate(item)} aria-current={section === item ? 'page' : undefined}>{({overview: 'Overview', people: 'People', profiles: 'Role profiles', timeline: 'Timeline', emails: 'Emails', tickets: 'Tickets'})[item]}</button>)}
         </nav>
         <div id="workspace" ref={headingRef} tabIndex={-1} className="page-shell py-8 scroll-mt-24">
           {storageWarning && <p role="status" className="mb-4 text-sm">{storageWarning}</p>}
           {section === 'overview' && (
             <Overview
               people={filteredPeople}
+              today={today}
               taskProgress={taskProgress}
               onOpenPerson={setDetail}
               onSection={navigate}
@@ -394,13 +440,14 @@ function Workspace({ manager, onSignOut }: { manager: Manager; onSignOut: () => 
             />
           )}
           {section === 'timeline' && <TimelineView people={filteredPeople} onOpenPerson={setDetail} />}
+          {section === 'tickets' && <TicketsPanel tickets={tickets} search={search} today={today} busy={ticketBusy} employees={visibleRoster} onUpdate={changeTicket} onOpenPerson={id => {const person = visibleRoster.find(person => person.id === id);if(person)setDetail(person);}} />}
           {section === 'emails' && <OnboardingEmails search={search} onOpenPerson={(id) => { const person = visibleRoster.find((item) => item.id === id); if (person) setDetail(person); }} employees={visibleRoster.map(({id, name}) => ({id, name}))} />}
         </div>
       </section>
 
       <JourneyForm employees={roster} key={`${createOpen}-${selectedProfile}`} profiles={profiles} selectedProfile={selectedProfile} open={createOpen} onOpenChange={setCreateOpen} type={journeyType} onType={setJourneyType} onSubmit={launchJourney} softwareOptions={softwareOptions} accessOptions={accessOptions} businessAreas={[...businessLines, 'Solutions Architecture', 'Global Technology']} managerFirstName={splitName(manager.name).firstName} managerLastName={splitName(manager.name).lastName} />
       <RoleProfileDialog key={`${editingProfile ? profileKey(editingProfile) : 'new'}-${profileOpen}`} initialProfile={editingProfile} open={profileOpen} onOpenChange={setProfileOpen} onSave={saveRoleProfile} />
-      <PersonDialog key={detail?.id ?? 'closed'} person={activeDetail} onClose={() => setDetail(null)} completedTasks={completedTasks} onToggleTask={toggleTask} onToggleBlocker={toggleBlocker} onRemove={removePerson} progress={detailProgress} />
+      <PersonDialog key={detail?.id ?? 'closed'} person={activeDetail} tickets={tickets} ticketBusy={ticketBusy} onUpdateTicket={changeTicket} today={today} onSaveDates={updateJourneyDates} onClose={() => setDetail(null)} completedTasks={completedTasks} onToggleTask={toggleTask} onToggleBlocker={toggleBlocker} onRemove={removePerson} progress={detailProgress} />
 
       {notice && (
         <div role="status" className="fixed bottom-4 left-4 right-4 z-[70] flex max-w-sm sm:left-auto items-center gap-3 rounded-xl border border-black/10 bg-[#1c1b1a] px-4 py-3.5 text-sm font-medium text-white shadow-2xl shadow-black/20">
@@ -425,6 +472,7 @@ function Sidebar({ section, onSection, onSignOut }: { section: Section; onSectio
         <NavItem icon={<Users />} label="People" active={section === 'people'} onClick={() => onSection('people')} />
         <NavItem icon={<FileCheck2 />} label="Role profiles" active={section === 'profiles'} onClick={() => onSection('profiles')} />
         <NavItem icon={<CalendarDays />} label="Timeline" active={section === 'timeline'} onClick={() => onSection('timeline')} />
+        <NavItem icon={<TicketCheck />} label="Tickets" active={section === 'tickets'} onClick={() => onSection('tickets')} />
         <NavItem icon={<Mail />} label="Emails" active={section === 'emails'} onClick={() => onSection('emails')} />
       </nav>
       <div className="px-4 pb-4"><button onClick={onSignOut} className="flex min-h-11 w-full items-center rounded-lg border border-white/20 px-3 text-sm font-medium text-white/80 transition hover:bg-white/10 hover:text-white">Sign out</button></div>
@@ -436,20 +484,28 @@ function Sidebar({ section, onSection, onSignOut }: { section: Section; onSectio
   );
 }
 
-function TopBar({ search, onSearch, onCreate, onSignOut, searchMode }: { searchMode: 'emails' | 'roles' | 'people'; search: string; onSearch: (value: string) => void; onCreate: () => void; onSignOut: () => void }) {
+function TopBar({ search, onSearch, onCreate, onSignOut, searchMode }: { searchMode: 'emails' | 'roles' | 'people' | 'tickets'; search: string; onSearch: (value: string) => void; onCreate: () => void; onSignOut: () => void }) {
   return (
     <header className="page-gutter sticky top-0 z-10 flex min-h-20 flex-wrap items-center justify-between gap-y-3 py-3 border-b border-black/[0.06] bg-[#f7f7f5]/90 backdrop-blur-xl">
-      <div className="relative min-w-0 basis-full sm:basis-auto sm:flex-1 sm:max-w-md"><Search aria-hidden="true" className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-black/70" /><Input type="search" aria-label={searchMode === 'emails' ? 'Search emails' : searchMode === 'roles' ? 'Search roles' : 'Search people by name, role or team'} value={search} onChange={(event) => onSearch(event.target.value)} placeholder={searchMode === 'emails' ? 'Search emails' : searchMode === 'roles' ? 'Search roles' : 'Search people'} className="h-11 rounded-lg border-black/20 bg-white pl-10 pr-3 text-sm" /></div>
+      <div className="relative min-w-0 basis-full sm:basis-auto sm:flex-1 sm:max-w-md"><Search aria-hidden="true" className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-black/70" /><Input type="search" aria-label={searchMode === 'emails' ? 'Search emails' : searchMode === 'roles' ? 'Search roles' : searchMode === 'tickets' ? 'Search tickets' : 'Search people by name, role or team'} value={search} onChange={(event) => onSearch(event.target.value)} placeholder={searchMode === 'emails' ? 'Search emails' : searchMode === 'roles' ? 'Search roles' : searchMode === 'tickets' ? 'Search tickets' : 'Search people'} className="h-11 rounded-lg border-black/20 bg-white pl-10 pr-3 text-sm" /></div>
       <Button variant="outline" onClick={onSignOut} className="min-h-11 rounded-lg px-3 text-sm lg:hidden">Sign out</Button>
       <Button onClick={onCreate} className="ml-auto h-11 rounded-lg px-4 text-sm"><Plus aria-hidden="true" /> Add person</Button>
     </header>
   );
 }
 
-function Overview({ people, taskProgress, onOpenPerson, onSection }: { people: Person[]; taskProgress: Record<string, string[]>; onOpenPerson: (person: Person) => void; onSection: (section: Section) => void }) {
+function Overview({ people, taskProgress, onOpenPerson, onSection, today }: { today: string; people: Person[]; taskProgress: Record<string, string[]>; onOpenPerson: (person: Person) => void; onSection: (section: Section) => void }) {
   const readiness = people.length ? Math.round(people.reduce((total, person) => total + person.progress, 0) / people.length) : 0;
   const completedCount = people.filter((person) => person.progress === 100).length;
   const blockers = people.flatMap((person) => openBlockers(person, taskProgress[person.id]).map((task) => ({person, task})));
+  const attention = people.flatMap(person => {
+    const tasks = tasksFor(person);
+    const completed = taskProgress[person.id] ?? tasks.filter(task => task.done).map(task => task.id);
+    return tasks.filter(task => !completed.includes(task.id)).map(task => ({person, task, urgency: deadlineStatus(task.dueISO, false, today)})).filter(item => item.urgency || item.task.blocked);
+  }).sort((a,b) => (a.urgency === 'important' ? 0 : a.task.blocked ? 1 : 2) - (b.urgency === 'important' ? 0 : b.task.blocked ? 1 : 2) || a.task.dueISO.localeCompare(b.task.dueISO));
+  const overdueCount = attention.filter(item => item.urgency === 'important').length;
+  const dueSoonCount = attention.filter(item => item.urgency === 'warning').length;
+  const blockedOnlyCount = attention.filter(item => !item.urgency).length;
   const activePeople = people.filter((person) => person.progress < 100 && person.type === 'onboarding').slice(0, 3);
   return (
     <>
@@ -462,20 +518,20 @@ function Overview({ people, taskProgress, onOpenPerson, onSection }: { people: P
         <section aria-labelledby="readiness-heading" className="w-full rounded-xl border border-black/[0.06] bg-white p-5 sm:p-6">
           <div className="flex items-start justify-between gap-3"><div><h2 id="readiness-heading" className="text-lg font-semibold">Team readiness</h2><p className="mt-1 text-sm text-black/70">Average checklist completion across {people.length} journeys</p></div><span className="text-4xl font-semibold tracking-tight">{readiness}%</span></div>
           <Progress aria-label="Average team checklist completion" value={readiness} className="mt-4 [&_[data-slot=progress-track]]:h-2 [&_[data-slot=progress-track]]:bg-[#eee] [&_[data-slot=progress-indicator]]:bg-[#36a35d]" />
-          <dl className="mt-5 grid grid-cols-3 gap-3 border-t border-black/10 pt-4">
+          <dl className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4 border-t border-black/10 pt-4">
             <div><dt className="text-xs text-black/70">Completed</dt><dd className="mt-1 text-xl font-semibold">{completedCount}</dd></div>
             <div><dt className="text-xs text-black/70">In progress</dt><dd className="mt-1 text-xl font-semibold">{people.length - completedCount}</dd></div>
             <div><dt className="text-xs text-black/70">Open blockers</dt><dd className="mt-1 text-xl font-semibold">{blockers.length}</dd></div>
+            <div><dt className="text-xs text-black/70">Overdue tasks</dt><dd className="mt-1 text-xl font-semibold text-[#9b1018]">{overdueCount}</dd></div>
           </dl>
         </section>
-        <section aria-labelledby="blockers-heading" className="w-full rounded-xl border border-black/10 bg-white p-5">
-          <div className="mb-3 flex items-center justify-between gap-3"><h2 id="blockers-heading" className="text-base font-semibold">Blockers</h2><span className="text-sm font-semibold text-black/70">{blockers.length} open</span></div>
-          {blockers.length ? <ul aria-label="Open blockers" tabIndex={0} className="flex snap-x snap-proximity gap-3 overflow-x-auto pb-3">{blockers.map(({person, task}) => <li key={`${person.id}-${task.id}`} className="w-72 max-w-[85vw] shrink-0 snap-start">
-            <button onClick={() => onOpenPerson(person)} className="flex h-full w-full items-start gap-3 rounded-lg border-l-2 border-[#c68016] bg-[#fff9ef] p-3 text-left hover:bg-[#fff2dc]">
-              <span className="min-w-0 flex-1"><span className="block text-sm font-semibold">{person.name}</span><span className="mt-1 block text-sm leading-relaxed">{person.id === 'maya' && task.id === 'equipment' ? 'Laptop may arrive after day one' : task.title}</span><span className="mt-2 block text-xs leading-relaxed text-black/70">{task.owner} · {task.date}</span></span><ArrowRight aria-hidden="true" className="mt-1 size-4 shrink-0 text-black/60" />
+        <TaskAttentionList count={attention.length} overdue={overdueCount} dueSoon={dueSoonCount} blockedOnly={blockedOnlyCount}>
+          {attention.map(({person, task, urgency}) => <li key={`${person.id}-${task.id}`} className="w-72 max-w-[85vw] shrink-0 snap-start">
+            <button onClick={() => onOpenPerson(person)} className={`flex h-full w-full items-start gap-3 rounded-lg border-l-2 p-3 text-left ${urgency === 'important' ? 'border-[#b00d15] bg-[#fff1f2] hover:bg-[#ffe7e9]' : 'border-[#c68016] bg-[#fff9ef] hover:bg-[#fff2dc]'}`}>
+              <span className="min-w-0 flex-1"><span className="block text-xs font-bold text-black/80">{urgency === 'important' ? 'IMPORTANT · overdue' : urgency === 'warning' ? 'WARNING · due soon' : 'Blocked'}{task.blocked && urgency ? ' · blocked' : ''}</span><span className="mt-2 block text-sm font-semibold">{person.name}</span><span className="mt-1 block text-sm leading-relaxed">{task.title}</span><span className="mt-2 block text-xs leading-relaxed text-black/70">{task.owner} · {task.date}</span></span><ArrowRight aria-hidden="true" className="mt-1 size-4 shrink-0 text-black/60" />
             </button>
-          </li>)}</ul> : <p className="flex items-center gap-2 py-3 text-sm text-[#216a3c]"><CheckCircle2 aria-hidden="true" className="size-4" />No open blockers.</p>}
-        </section>
+          </li>)}
+        </TaskAttentionList>
       </div>
 
       <div className="mb-6 rounded-xl border border-black/[0.06] bg-white p-6">
@@ -523,9 +579,7 @@ function ProfilesView({ profiles, onNewProfile, onUseProfile, onEditProfile }: {
 
 function TimelineView({ people, onOpenPerson }: { people: Person[]; onOpenPerson: (person: Person) => void }) {
   function dateFor(person: Person) {
-    if (person.dateISO) return person.dateISO;
-    const month = person.date.includes('Sep') ? '09' : person.date.includes('Nov') ? '11' : '10';
-    return `2026-${month}-${person.date.match(/\d+/)?.[0].padStart(2, '0') ?? '01'}`;
+    return journeyDate(person);
   }
   const groups = new Map<string, Person[]>();
   [...people].sort((a, b) => dateFor(a).localeCompare(dateFor(b))).forEach((person) => {
@@ -564,7 +618,7 @@ function PersonCard({ person, onOpen, expanded = false }: { person: Person; onOp
 }
 
 function StatusBadge({ status, label }: { status: Person['status']; label: string }) {
-  const style = status === 'blocked' ? 'text-[#855000]' : status === 'complete' ? 'text-[#216a3c]' : status === 'offboarding' ? 'text-[#6952a3]' : 'text-[#326a9d]';
+  const style = status === 'important' ? 'text-[#b00d15]' : status === 'warning' ? 'text-[#855000]' : status === 'blocked' ? 'text-[#855000]' : status === 'complete' ? 'text-[#216a3c]' : status === 'offboarding' ? 'text-[#6952a3]' : 'text-[#326a9d]';
   return <span className={`shrink-0 text-xs font-semibold ${style}`}>{label}</span>;
 }
 
@@ -678,13 +732,16 @@ function SectionHeading({ icon, title, description }: { icon: ReactNode; title: 
 }
 
 function tasksFor(person: Person) {
-  if (person.type === 'offboarding') return [
-    {id: 'departure', title: 'Confirm departure date and HR records', owner: 'HR', date: person.date, done: false, icon: UserMinus, blocked: false},
-    {id: 'handover', title: 'Complete handover and save team files', owner: 'Manager', date: person.date, done: false, icon: FileCheck2, blocked: false},
-    {id: 'return', title: 'Return laptop and other equipment', owner: 'Employee', date: person.date, done: false, icon: Laptop, blocked: false},
-    {id: 'revoke', title: 'Remove account and system access', owner: 'IT', date: person.date, done: false, icon: KeyRound, blocked: false},
-  ].map((task, index) => ({...task, done: person.id === 'sarah' && index < 2, blocked: (person.blockedTasks ?? []).includes(task.id)}));
-  return taskSeed.map((task, index) => ({...(person.id === 'maya' ? task : {...task, date: person.date, done: index < Math.round(person.progress / 100 * taskSeed.length)}), blocked: (person.blockedTasks ?? (person.id === 'maya' ? ['equipment'] : [])).includes(task.id)}));
+  const tasks = person.type === 'offboarding' ? [
+    {id: 'departure', title: 'Confirm departure date and HR records', owner: 'HR', done: person.id === 'sarah', icon: UserMinus},
+    {id: 'handover', title: 'Complete handover and save team files', owner: 'Manager', done: person.id === 'sarah', icon: FileCheck2},
+    {id: 'return', title: 'Return laptop and other equipment', owner: 'Employee', done: false, icon: Laptop},
+    {id: 'revoke', title: 'Remove account and system access', owner: 'IT', done: false, icon: KeyRound},
+  ] : taskSeed.map((task, index) => ({...task, done: person.id === 'maya' ? task.done : index < Math.round(person.progress / 100 * taskSeed.length)}));
+  return tasks.map(task => {
+    const dueISO = taskDueDate(person, task.id);
+    return {...task, dueISO, date: `Due ${formatDate(dueISO)}`, blocked: (person.blockedTasks ?? (person.id === 'maya' ? ['equipment'] : [])).includes(task.id)};
+  });
 }
 
 function openBlockers(person: Person, completed?: string[]) {
@@ -697,7 +754,7 @@ function canRemovePerson(person: Person, completed: string[]) {
   return person.type === 'offboarding' && tasksFor(person).every((task) => completed.includes(task.id));
 }
 
-function PersonDialog({ person, onClose, completedTasks, onToggleTask, onToggleBlocker, onRemove, progress }: { person: Person | null; onClose: () => void; completedTasks: string[]; onToggleTask: (id: string, checked: boolean) => void; onToggleBlocker: (id: string, flagged: boolean) => void; onRemove: () => Promise<void>; progress: number }) {
+function PersonDialog({ person, onClose, completedTasks, onToggleTask, onToggleBlocker, onRemove, progress, today, onSaveDates, tickets, ticketBusy, onUpdateTicket }: { tickets: JourneyTicket[]; ticketBusy: boolean; onUpdateTicket: (ticket: JourneyTicket, status: TicketStatus) => Promise<void>; today: string; onSaveDates: (date: string, dates: Record<string, string>) => Promise<void>; person: Person | null; onClose: () => void; completedTasks: string[]; onToggleTask: (id: string, checked: boolean) => void; onToggleBlocker: (id: string, flagged: boolean) => void; onRemove: () => Promise<void>; progress: number }) {
   const [confirmRemoval, setConfirmRemoval] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [removeError, setRemoveError] = useState('');
@@ -767,6 +824,7 @@ function PersonDialog({ person, onClose, completedTasks, onToggleTask, onToggleB
             <div className="border-b border-black/[0.06] bg-white px-6">
               <TabsList variant="line" className="min-h-12 w-full justify-start gap-2">
                 <TabsTrigger value="overview" className="flex-none px-1 text-sm sm:text-sm">Tasks</TabsTrigger>
+                <TabsTrigger value="tickets" className="flex-none px-1 text-sm">Tickets</TabsTrigger>
                 <TabsTrigger value="access" className="flex-none px-1 text-sm sm:text-sm">Access <span className="rounded-md bg-[#edf5ff] px-1.5 py-0.5 text-xs text-[#326a9d]">{accessItems.length + Number(person.access?.includes('Soft Token'))}</span></TabsTrigger>
                 <TabsTrigger value="devices" className="flex-none px-1 text-sm sm:text-sm">Devices {updateCount > 0 && <span className="rounded-md bg-[#fff2dc] px-1.5 py-0.5 text-xs text-[#9b5c00]">{updateCount}</span>}</TabsTrigger>
               </TabsList>
@@ -775,20 +833,22 @@ function PersonDialog({ person, onClose, completedTasks, onToggleTask, onToggleB
             <div className="max-h-[calc(94dvh-205px)] overflow-y-auto bg-[#f7f7f5]">
               <TabsContent value="overview" className="p-6">
                 <EmployeeIdentifiers sid={person.sid} eid={person.eid} email={person.email} />
+                <JourneyDateEditor person={person} tasks={tasksFor(person)} disabled={removing || ticketBusy} onSave={onSaveDates} />
                 {!!person.journeyHistory?.length && <details className="mb-6 rounded-lg border border-black/10 bg-white p-4"><summary className="min-h-11 cursor-pointer text-sm font-semibold">Previous journeys ({person.journeyHistory.length})</summary><ul className="space-y-3 border-t border-black/10 pt-3">{person.journeyHistory.map((journey, index) => <li key={index} className="text-sm"><span className="font-semibold capitalize">{journey.type}</span> · {journey.date || 'Date not recorded'}<p className="mt-1 text-black/70">{journey.role} · {journey.complete ? 'Complete' : `${journey.completedTasks.length} tasks completed`}</p></li>)}</ul></details>}
                 <div className="mb-6 flex items-center justify-between"><div><h3 className="text-base font-semibold">Journey checklist</h3><p className="mt-1 text-sm text-black/70">Check off completed tasks. Changes are saved in SQLite.</p></div><Badge variant="outline" className="text-sm">{person.date}</Badge></div>
                 <div className="mb-5 rounded-xl border border-black/[0.06] bg-white p-4"><div className="mb-2 flex justify-between text-sm"><span className="font-semibold text-black/70">Journey progress</span><span className="text-black/70">{progress}% complete</span></div><Progress aria-label="Journey completion" value={progress} className="[&_[data-slot=progress-track]]:h-2 [&_[data-slot=progress-track]]:bg-black/[0.06] [&_[data-slot=progress-indicator]]:bg-[#ec111a]" /></div>
-                <div className="space-y-2">{tasksFor(person).map((task) => { const Icon = task.icon; const done = completedTasks.includes(task.id); return <div key={task.id} className={`flex items-start gap-3 rounded-lg border p-3.5 transition ${task.blocked && !done ? 'border-[#f0d5b1] bg-[#fff9ef]' : 'border-black/[0.06] bg-white hover:border-black/15'}`}><Checkbox disabled={removing} aria-label={`Mark ${task.title} complete`} checked={done} onCheckedChange={(checked) => onToggleTask(task.id, checked === true)} className="mt-0.5" /><div className={`grid size-8 shrink-0 place-items-center rounded-lg ${done ? 'bg-[#edf8f0] text-[#288048]' : 'bg-[#f3f2ef] text-black/70'}`}><Icon aria-hidden="true" className="size-4" /></div><div className="min-w-0 flex-1"><div className="flex items-start justify-between gap-3"><p className={`text-sm font-semibold ${done ? 'text-black/70 line-through' : ''}`}>{task.title}</p>{task.blocked && !done && <span className="shrink-0 rounded-md bg-[#fff2dc] px-2 py-0.5 text-xs font-bold uppercase text-[#704500]">Blocked</span>}</div><p className="mt-1 text-sm text-black/70">{task.owner} · {task.date}</p>{!done && <button type="button" disabled={removing} aria-pressed={task.blocked} onClick={() => onToggleBlocker(task.id, !task.blocked)} className="mt-2 min-h-11 text-xs font-semibold underline underline-offset-4">{task.blocked ? 'Clear blocker' : 'Flag blocker'}</button>}</div></div>; })}</div>
+                <div className="space-y-2">{tasksFor(person).map((task) => { const Icon = task.icon; const done = completedTasks.includes(task.id); const urgency = deadlineStatus(task.dueISO, done, today); return <div key={task.id} className={`flex items-start gap-3 rounded-lg border p-3.5 transition ${urgency === 'important' ? 'border-[#e8a9ae] bg-[#fff1f2]' : urgency === 'warning' || task.blocked && !done ? 'border-[#f0d5b1] bg-[#fff9ef]' : 'border-black/[0.06] bg-white hover:border-black/15'}`}><Checkbox disabled={removing || ticketBusy} aria-label={`Mark ${task.title} complete`} checked={done} onCheckedChange={(checked) => onToggleTask(task.id, checked === true)} className="mt-0.5" /><div className={`grid size-8 shrink-0 place-items-center rounded-lg ${done ? 'bg-[#edf8f0] text-[#288048]' : 'bg-[#f3f2ef] text-black/70'}`}><Icon aria-hidden="true" className="size-4" /></div><div className="min-w-0 flex-1"><div className="flex flex-wrap items-start justify-between gap-3"><p className={`text-sm font-semibold ${done ? 'text-black/70 line-through' : ''}`}>{task.title}</p>{urgency && <span className={`shrink-0 rounded-sm px-2 py-1 text-xs font-bold ${urgency === 'important' ? 'bg-[#ffe0e3] text-[#9b1018]' : 'bg-[#fff2dc] text-[#704500]'}`}>{urgency === 'important' ? 'IMPORTANT · overdue' : 'WARNING · due soon'}</span>}{task.blocked && !done && <span className="shrink-0 rounded-md bg-[#fff2dc] px-2 py-0.5 text-xs font-bold uppercase text-[#704500]">Blocked</span>}</div><p className="mt-1 text-sm text-black/70">{task.owner} · {task.date}</p>{!done && <button type="button" disabled={removing || ticketBusy} aria-pressed={task.blocked} onClick={() => onToggleBlocker(task.id, !task.blocked)} className="mt-2 min-h-11 text-xs font-semibold underline underline-offset-4">{task.blocked ? 'Clear blocker' : 'Flag blocker'}</button>}</div></div>; })}</div>
                 {person.type === 'offboarding' && <section className="mt-6 border-t border-black/10 pt-5" aria-labelledby="remove-person-heading">
                   <h3 id="remove-person-heading" className="text-sm font-semibold">Close offboarding</h3>
                   {!canRemovePerson(person, completedTasks) ? <p className="mt-2 text-sm text-black/70">Complete all offboarding tasks to enable Remove person.</p> : !confirmRemoval ? <div className="mt-3 flex flex-wrap items-center justify-between gap-3"><p className="text-sm text-black/70">All offboarding tasks are complete.</p><Button variant="destructive" onClick={() => setConfirmRemoval(true)} className="min-h-11 rounded-lg">Remove person</Button></div> : <div className="mt-3 rounded-lg border border-[#e9c4c4] bg-white p-4">
-                    <p className="font-semibold">Remove {person.name}?</p><p className="mt-2 text-sm leading-relaxed text-black/70">This deletes the person and their checklist from SQLite. Role profiles and emails are kept. This cannot be undone.</p>
+                    <p className="font-semibold">Remove {person.name}?</p><p className="mt-2 text-sm leading-relaxed text-black/70">This deletes the person and their checklist from SQLite. Role profiles emails and ticket history are kept. This cannot be undone.</p>
                     {removeError && <p role="alert" className="mt-3 text-sm text-[#9b1018]">{removeError}</p>}
-                    <div className="mt-4 flex flex-wrap gap-3"><Button variant="outline" disabled={removing} onClick={() => {setConfirmRemoval(false); setRemoveError('');}}>Cancel</Button><Button variant="destructive" disabled={removing} onClick={() => void confirmRemove()}>{removing ? 'Removing…' : 'Confirm removal'}</Button></div>
+                    <div className="mt-4 flex flex-wrap gap-3"><Button variant="outline" disabled={removing || ticketBusy} onClick={() => {setConfirmRemoval(false); setRemoveError('');}}>Cancel</Button><Button variant="destructive" disabled={removing || ticketBusy} onClick={() => void confirmRemove()}>{removing ? 'Removing…' : 'Confirm removal'}</Button></div>
                   </div>}
                 </section>}
               </TabsContent>
 
+              <TabsContent value="tickets" className="p-6"><TicketsPanel tickets={tickets} employeeId={person.id} journeyId={person.journeyId} today={today} busy={ticketBusy} onUpdate={onUpdateTicket} /></TabsContent>
               <TabsContent value="access" className="p-6">
                 {person.access?.includes('Soft Token') && <SoftTokenAccess employeeId={person.id} completedOffboarding={person.type === 'offboarding' && progress === 100} />}
                 <div className="mb-6 flex flex-col justify-between gap-3 sm:flex-row sm:items-end"><div><h3 className="text-base font-semibold">Software access & activation</h3><p className="mt-1 text-sm text-black/70">View software requests and activation codes.</p></div></div>
