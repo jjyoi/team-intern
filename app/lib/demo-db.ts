@@ -1,6 +1,6 @@
 /** Client for the local Python + SQLite demo API. */
-export type Manager = { id: string; name: string; email: string };
-export const DEMO_EMAIL = 'manager@example.com';
+export type Manager = { id: string; name: string; email: string; sid: string };
+export const DEMO_SID = 's1234567';
 export const DEMO_PASSWORD = 'Welcome123!';
 
 async function request<T>(path: string, body?: unknown): Promise<T> {
@@ -19,7 +19,7 @@ async function request<T>(path: string, body?: unknown): Promise<T> {
   return result as T;
 }
 
-export function signIn(email: string, password: string): Promise<Manager> { return request('login', {email, password}); }
+export function signIn(sid: string, password: string): Promise<Manager> { return request('login', {sid, password}); }
 export async function currentManager(): Promise<Manager | undefined> {
   const response = await fetch('/api/demo/session', {credentials: 'same-origin'});
   if (response.status === 401) return undefined;
@@ -47,3 +47,8 @@ export type OnboardingEmail = {
 };
 export function listEmails(): Promise<OnboardingEmail[]> { return request('emails'); }
 export async function markEmailRead(id: string): Promise<void> { await request('emails/read', {id}); }
+
+export type SoftTokenCode = {code: string; expires_at: number; server_time: number};
+export function getSoftToken(employeeId: string): Promise<SoftTokenCode> {
+  return request(`soft-token?employee_id=${encodeURIComponent(employeeId)}`);
+}

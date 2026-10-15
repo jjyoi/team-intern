@@ -4,14 +4,14 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { LogIn } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { currentManager, DEMO_EMAIL, DEMO_PASSWORD, signIn, signOut, type Manager } from '@/lib/demo-db';
+import { currentManager, DEMO_SID, DEMO_PASSWORD, signIn, signOut, type Manager } from '@/lib/demo-db';
 
 export function ManagerLogin({ children }: { children: (manager: Manager, logout: () => void) => ReactNode }) {
   const [manager, setManager] = useState<Manager>();
   const [checking, setChecking] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const emailRef = useRef<HTMLInputElement>(null);
+  const sidRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let active = true;
@@ -27,13 +27,13 @@ export function ManagerLogin({ children }: { children: (manager: Manager, logout
     const form = new FormData(event.currentTarget);
     setBusy(true);
     setError('');
-    try { setManager(await signIn(String(form.get('email')), String(form.get('password')))); }
+    try { setManager(await signIn(String(form.get('sid')), String(form.get('password')))); }
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not sign in. Try again.'); }
     finally { setBusy(false); }
   }
 
   async function logout() {
-    try { await signOut(); setManager(undefined); setError(''); requestAnimationFrame(() => emailRef.current?.focus()); }
+    try { await signOut(); setManager(undefined); setError(''); requestAnimationFrame(() => sidRef.current?.focus()); }
     catch { setError('Could not sign out. Try again.'); }
   }
 
@@ -47,8 +47,8 @@ export function ManagerLogin({ children }: { children: (manager: Manager, logout
       <h1 id="login-heading" className="mt-2 text-3xl font-semibold tracking-tight">Manager sign-in</h1>
       <p className="mt-3 text-sm leading-relaxed text-black/70">Manage your team’s onboarding tasks, equipment, and access in one place.</p>
       <form onSubmit={submit} aria-busy={busy} className="mt-6 space-y-5">
-        <div><label htmlFor="manager-email" className="mb-2 block text-sm font-semibold">Work email</label>
-          <Input ref={emailRef} id="manager-email" name="email" type="email" autoComplete="username" required defaultValue={DEMO_EMAIL} aria-describedby="sign-in-details" className="h-11 w-full rounded-lg" /></div>
+        <div><label htmlFor="manager-sid" className="mb-2 block text-sm font-semibold">SID (ScotiaID)</label>
+          <Input ref={sidRef} id="manager-sid" name="sid" type="text" pattern="[sS][0-9]{7}" maxLength={8} autoCapitalize="none" spellCheck={false} title="s followed by seven digits" autoComplete="username" required defaultValue={DEMO_SID} aria-describedby="sign-in-details" className="h-11 w-full rounded-lg" /></div>
         <div><label htmlFor="manager-password" className="mb-2 block text-sm font-semibold">Password</label>
           <Input id="manager-password" name="password" type="password" autoComplete="current-password" required aria-describedby={error ? 'login-error' : 'sign-in-details'} aria-invalid={Boolean(error)} className="h-11 w-full rounded-lg" /></div>
         {error && <p id="login-error" role="alert" className="rounded-lg bg-[#fff1f1] p-3 text-sm text-[#9b1018]">{error}</p>}
@@ -56,7 +56,7 @@ export function ManagerLogin({ children }: { children: (manager: Manager, logout
       </form>
       <div id="sign-in-details" className="mt-6 rounded-lg bg-[#f5f5f2] p-4 text-sm leading-relaxed text-black/75">
         <p className="font-semibold">Sign-in details</p>
-        <p className="mt-1 break-all">Email: {DEMO_EMAIL}</p>
+        <p className="mt-1 break-all">SID: {DEMO_SID}</p>
         <p>Password: <code className="select-all font-semibold">{DEMO_PASSWORD}</code></p>
       </div>
     </section>
