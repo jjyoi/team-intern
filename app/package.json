@@ -6,10 +6,12 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "dev": "vinext dev",
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "vinext dev",
     "build": "vinext build",
     "start": "wrangler dev --config dist/server/wrangler.json",
     "db:generate": "drizzle-kit generate",
+    "test:api": "python3 -m unittest discover -s backend -p \"test_*.py\"",
     "lint": "oxlint",
     "format": "oxfmt"
   },

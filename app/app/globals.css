@@ -8,6 +8,8 @@
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
+  --color-popover: var(--card);
+  --color-popover-foreground: var(--card-foreground);
   --color-card-foreground: var(--card-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
@@ -19,8 +21,8 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
   --color-destructive: var(--destructive);
-  --font-sans: var(--font-geist-sans);
-  --font-heading: var(--font-geist-sans);
+  --font-sans: var(--font-inter);
+  --font-heading: var(--font-inter);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) * 1.35);
   --radius-2xl: calc(var(--radius) * 1.7);
@@ -41,7 +43,7 @@
   --input: rgba(0, 0, 0, 0.1);
   --ring: rgba(236, 17, 26, 0.3);
   --destructive: #c40d15;
-  --radius: 0.75rem;
+  --radius: 0.5rem;
 }
 
 .dark {
@@ -63,9 +65,65 @@
 
 @layer base {
   * { @apply border-border outline-ring/50; }
-  html { @apply font-sans; }
+  html { @apply font-sans; font-family: var(--font-inter), Arial, sans-serif; }
   body { @apply bg-background text-foreground antialiased; }
   button, a { -webkit-tap-highlight-color: transparent; }
 }
 
 ::selection { background: rgba(236, 17, 26, 0.16); }
+
+/* One spacing scale and a shared twelve-column dashboard grid. */
+:root {
+  --page-gutter: 1rem;
+  --grid-gap: 1rem;
+}
+@media (min-width: 640px) { :root { --page-gutter: 2rem; } }
+@media (min-width: 1280px) { :root { --page-gutter: 2.5rem; } }
+.page-gutter, .page-shell { padding-inline: var(--page-gutter); }
+.page-shell { margin-inline: auto; max-width: 1450px; }
+.dashboard-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: var(--grid-gap); }
+.dashboard-grid > * { grid-column: span 12; min-width: 0; }
+@media (min-width: 1024px) {
+  .dashboard-grid > .grid-main { grid-column: span 8; }
+  .dashboard-grid > .grid-side { grid-column: span 4; }
+}
+button:focus-visible, a:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+/* Accessible controls remain readable and usable at zoomed and narrow widths. */
+@layer base {
+  button:not([data-slot="checkbox"]), [data-slot="button"], input:not([type="checkbox"]), select { min-height: 44px; }
+  button { white-space: normal; }
+  input, select { font-size: 1rem; }
+}
+.skip-link { position: fixed; top: 1rem; left: 1rem; z-index: 100; padding: .75rem 1rem; background: #fff; color: #191919; border: 2px solid #191919; border-radius: .5rem; transform: translateY(-200%); }
+.skip-link:focus { transform: translateY(0); }
+.mobile-nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; padding-block: 1rem; background: #fff; border-bottom: 1px solid #ddd; }
+.mobile-nav button { padding: .5rem; border-radius: .5rem; color: #3b3b3b; font-size: .875rem; }
+.mobile-nav button[aria-current="page"] { background: #191919; color: #fff; font-weight: 600; }
+@media (min-width: 640px) { .mobile-nav { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+@media (min-width: 1024px) { .mobile-nav { display: none; } }
+[data-slot="dialog-close"] { min-width: 44px; min-height: 44px; background: #fff; color: #191919; border: 1px solid #ddd; }
+[data-slot="dialog-header"] { padding-right: 3.5rem; }
+[data-slot="dialog-content"] code { overflow-wrap: anywhere; }
+
+[data-slot="tabs-trigger"] { color: #454545; }
+[data-slot="tabs-trigger"][data-active] { color: #191919; }
+
+.date-rail { list-style: none; padding: 0; }
+.date-rail-group { position: relative; display: grid; grid-template-columns: 76px 20px minmax(0, 1fr); column-gap: 12px; padding-bottom: 24px; }
+.date-rail-group:not(:last-child)::after { content: ''; position: absolute; left: 97px; top: 26px; bottom: -18px; width: 1px; background: #d0d0cc; }
+.date-rail-date { padding-top: 8px; }
+.date-rail-dot { width: 10px; height: 10px; border: 2px solid #ec111a; border-radius: 50%; background: #f7f7f5; margin: 18px 5px 0; }
+@media (max-width: 480px) {
+  .date-rail-group { grid-template-columns: 58px 16px minmax(0, 1fr); column-gap: 8px; }
+  .date-rail-group:not(:last-child)::after { left: 73px; }
+  .date-rail-dot { margin-inline: 3px; }
+}
+
+/* Keep the root font variable available before inherited fonts are computed. */
+html, body, button, input, select, textarea, code, pre, kbd, samp {
+  font-family: var(--font-inter, Inter), Arial, sans-serif;
+}

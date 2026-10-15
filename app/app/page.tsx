@@ -37,6 +37,18 @@ import {
   X,
 } from 'lucide-react';
 
+import { JourneyForm } from '@/components/journey-form';
+import { ManagerLogin } from '@/components/manager-login';
+import { OnboardingEmails } from '@/components/onboarding-emails';
+import {
+  MANUAL_PROFILE,
+  fullName,
+  splitName,
+  type JourneyFields,
+} from '@/lib/journey-fields';
+import { profileKey } from '@/lib/role-access';
+import type { Manager } from '@/lib/demo-db';
+
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -55,7 +67,13 @@ import {
 } from '@/components/ui/native-select';
 import { Progress } from '@/components/ui/progress';
 
-type Section = 'overview' | 'people' | 'requests' | 'profiles' | 'timeline';
+type Section =
+  | 'overview'
+  | 'people'
+  | 'requests'
+  | 'profiles'
+  | 'timeline'
+  | 'emails';
 type JourneyType = 'onboarding' | 'offboarding';
 type TicketStatus =
   | 'Draft'
@@ -99,6 +117,7 @@ type WorkspaceSnapshot = {
 };
 
 type RoleProfile = {
+  id?: string;
   title: string;
   role?: string;
   area: string;
@@ -108,6 +127,10 @@ type RoleProfile = {
   icon?: typeof Boxes;
   manager?: string;
   hardware?: string;
+  software?: string[];
+  access?: string[];
+  laptop?: string;
+  headset?: boolean;
 };
 
 type ProfileDraft = {
@@ -205,6 +228,22 @@ const ticketStatuses: TicketStatus[] = [
 ];
 
 export default function Home() {
+  return (
+    <ManagerLogin>
+      {(manager, logout) => (
+        <Workspace key={manager.id} manager={manager} onSignOut={logout} />
+      )}
+    </ManagerLogin>
+  );
+}
+
+function Workspace({
+  manager,
+  onSignOut,
+}: {
+  manager: Manager;
+  onSignOut: () => void;
+}) {
   const [section, setSection] = useState<Section>('overview');
   const [team, setTeam] = useState<Person[]>([]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
@@ -219,6 +258,9 @@ export default function Home() {
   const [search, setSearch] = useState('');
   const [blockerHandled, setBlockerHandled] = useState(false);
   const [notice, setNotice] = useState('');
+  const [selectedProfile, setSelectedProfile] = useState(
+    profileKey(roleProfiles[0]),
+  );
 
   function applyWorkspace(workspace: WorkspaceSnapshot) {
     setTeam(workspace.people);
@@ -270,26 +312,31 @@ export default function Home() {
       : team;
   }, [search, team]);
 
-  async function launchJourney(event: React.SyntheticEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const name = getFormString(form, 'name', 'New employee');
-    const email = getFormString(form, 'email');
-    const role = getFormString(form, 'role', 'Employee');
-    const area = getFormString(form, 'area', 'Canadian Banking');
-    const dateValue = getFormString(form, 'date');
-    const manager = getFormString(form, 'manager', 'Jordan Wallace');
+  async function launchJourney(fields: JourneyFields) {
+    const name = fullName(fields.firstName, fields.lastName);
+    const selected = [...roleProfiles, ...customProfiles].find(
+      (profile) => profileKey(profile) === fields.profileId,
+    );
+    const role =
+      fields.profileId === MANUAL_PROFILE
+        ? fields.jobTitle
+        : (selected?.role ?? selected?.title ?? 'Employee');
+    const area = fields.businessArea || selected?.area || 'Canadian Banking';
+    const managerName = fullName(
+      fields.managerFirstName,
+      fields.managerLastName,
+    );
     try {
       const response = await fetch('/api/journeys', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name,
-          email,
+          email: fields.email,
           role,
           department: area,
-          manager,
-          targetDate: dateValue,
+          manager: managerName,
+          targetDate: fields.date,
           type: journeyType,
         }),
       });
@@ -388,6 +435,10 @@ export default function Home() {
         ready: true,
         icon: FileCheck2,
         manager: profile.manager,
+        software: profile.software,
+        access: profile.access,
+        laptop: profile.laptop,
+        headset: profile.headset,
         hardware: profile.headset
           ? `${profile.laptop} · Jabra Evolve2 50`
           : profile.laptop,
@@ -408,6 +459,8 @@ export default function Home() {
         requestCount={
           tickets.filter((ticket) => ticket.status !== 'Completed').length
         }
+        manager={manager}
+        onSignOut={onSignOut}
       />
 
       <section className="min-h-screen lg:pl-[236px]">
@@ -416,6 +469,7 @@ export default function Home() {
           onSearch={setSearch}
           onCreate={() => setCreateOpen(true)}
           hasNotice={!blockerHandled}
+          onSignOut={onSignOut}
         />
 
         <div className="mx-auto max-w-[1450px] px-5 py-7 sm:px-8 xl:px-11 xl:py-9">
@@ -478,7 +532,8 @@ export default function Home() {
             <ProfilesView
               customProfiles={customProfiles}
               onNewProfile={() => setProfileOpen(true)}
-              onUseProfile={() => {
+              onUseProfile={(profile) => {
+                setSelectedProfile(profileKey(profile));
                 setJourneyType('onboarding');
                 setCreateOpen(true);
               }}
@@ -487,14 +542,36 @@ export default function Home() {
           {section === 'timeline' && (
             <TimelineView people={team} onOpenPerson={setDetail} />
           )}
+          {section === 'emails' && (
+            <OnboardingEmails
+              search={search}
+              employees={team.map(({ id, name }) => ({ id, name }))}
+              onOpenPerson={(id) => {
+                const person = team.find((item) => item.id === id);
+                if (person) setDetail(person);
+              }}
+            />
+          )}
         </div>
       </section>
 
-      <JourneyDialog
+      <JourneyForm
+        key={`${createOpen}-${selectedProfile}`}
         open={createOpen}
         onOpenChange={setCreateOpen}
         type={journeyType}
         onType={setJourneyType}
+        profiles={[...roleProfiles, ...customProfiles]}
+        selectedProfile={selectedProfile}
+        softwareOptions={softwareOptions}
+        accessOptions={[...accessOptions, 'Soft Token']}
+        businessAreas={[
+          ...businessLines,
+          'Solutions Architecture',
+          'Global Technology',
+        ]}
+        managerFirstName={splitName(manager.name).firstName}
+        managerLastName={splitName(manager.name).lastName}
         onSubmit={launchJourney}
       />
       <RoleProfileDialog
@@ -535,11 +612,15 @@ function Sidebar({
   onSection,
   peopleCount,
   requestCount,
+  manager,
+  onSignOut,
 }: {
   section: Section;
   onSection: (section: Section) => void;
   peopleCount: number;
   requestCount: number;
+  manager: Manager;
+  onSignOut: () => void;
 }) {
   return (
     <aside className="fixed inset-y-0 left-0 z-20 hidden w-[236px] flex-col border-r border-black/[0.07] bg-[#121212] text-white lg:flex">
@@ -587,6 +668,12 @@ function Sidebar({
           active={section === 'timeline'}
           onClick={() => onSection('timeline')}
         />
+        <NavItem
+          icon={<Mail />}
+          label="Emails"
+          active={section === 'emails'}
+          onClick={() => onSection('emails')}
+        />
         <p className="px-3 pb-2 pt-7 text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">
           Workspace
         </p>
@@ -601,6 +688,14 @@ function Sidebar({
           onClick={() => onSection('overview')}
         />
       </nav>
+      <div className="px-4 pb-2">
+        <button
+          onClick={onSignOut}
+          className="flex min-h-10 w-full items-center rounded-xl border border-white/15 px-3 text-xs font-semibold text-white/70 transition hover:bg-white/10 hover:text-white"
+        >
+          Sign out
+        </button>
+      </div>
       <div className="m-4 rounded-2xl bg-white/[0.07] p-4">
         <div className="mb-3 flex items-center gap-2 text-xs font-semibold">
           <Sparkles className="size-3.5 text-[#ff777c]" /> Need a hand?
@@ -617,7 +712,7 @@ function Sidebar({
           JW
         </div>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-xs font-semibold">Jordan Wallace</p>
+          <p className="truncate text-xs font-semibold">{manager.name}</p>
           <p className="mt-1 truncate text-[10px] text-white/40">
             People Manager
           </p>
@@ -633,11 +728,13 @@ function TopBar({
   onSearch,
   onCreate,
   hasNotice,
+  onSignOut,
 }: {
   search: string;
   onSearch: (value: string) => void;
   onCreate: () => void;
   hasNotice: boolean;
+  onSignOut: () => void;
 }) {
   return (
     <header className="sticky top-0 z-10 flex h-20 items-center justify-between border-b border-black/[0.06] bg-[#f7f7f5]/90 px-5 backdrop-blur-xl sm:px-8 xl:px-11">
@@ -658,6 +755,13 @@ function TopBar({
         />
       </div>
       <div className="flex items-center gap-2">
+        <Button
+          variant="outline"
+          onClick={onSignOut}
+          className="h-10 rounded-xl px-3 text-xs lg:hidden"
+        >
+          Sign out
+        </Button>
         <button
           aria-label="Notifications"
           className="relative grid size-10 place-items-center rounded-xl border border-black/[0.08] bg-white text-black/60 transition hover:bg-black/[0.03]"
@@ -962,7 +1066,7 @@ function ProfilesView({
 }: {
   customProfiles: RoleProfile[];
   onNewProfile: () => void;
-  onUseProfile: () => void;
+  onUseProfile: (profile: RoleProfile) => void;
 }) {
   const profiles = [...customProfiles, ...roleProfiles];
   return (
@@ -1046,7 +1150,7 @@ function ProfilesView({
                   <p className="mt-1 text-[10px] text-black/35">Access items</p>
                 </div>
                 <button
-                  onClick={onUseProfile}
+                  onClick={() => onUseProfile(profile)}
                   className="ml-auto self-end text-[11px] font-semibold text-black/50 transition group-hover:text-black"
                 >
                   Use profile <ArrowRight className="ml-1 inline size-3" />
@@ -1702,6 +1806,10 @@ function JourneyDialog({
     </Dialog>
   );
 }
+
+// Kept as a compact fallback for older saved links while JourneyForm powers the
+// current create flow.
+void JourneyDialog;
 
 function RoleProfileDialog({
   open,
