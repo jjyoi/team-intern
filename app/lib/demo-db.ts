@@ -33,12 +33,21 @@ export async function loadWorkspace<T>(managerId: string): Promise<T | undefined
   const legacy = managerId === 'jordan' ? localStorage.getItem('scotiapath-demo-v1') : null;
   return legacy ? JSON.parse(legacy) as T : undefined;
 }
-let pendingWorkspaceSave: Promise<void> = Promise.resolve();
-export async function saveWorkspace(_managerId: string, state: unknown): Promise<void> {
+let pendingWorkspaceSave: Promise<unknown> = Promise.resolve();
+export async function saveWorkspace<T>(_managerId: string, state: T): Promise<T> {
   const snapshot = JSON.parse(JSON.stringify(state));
-  const next = pendingWorkspaceSave.catch(() => {}).then(async () => { await request('workspace', snapshot); });
+  const next = pendingWorkspaceSave.catch(() => {}).then(async () => {
+    const saved = await request<unknown>('workspace', snapshot);
+    if (!saved || typeof saved !== 'object' ||
+        !Array.isArray((saved as {roster?: unknown}).roster) ||
+        !(saved as {tasks?: unknown}).tasks || typeof (saved as {tasks?: unknown}).tasks !== 'object' ||
+        !Array.isArray((saved as {profiles?: unknown}).profiles)) {
+      throw new Error('The database server is running an older version. In the terminal running the app, press Ctrl+C, run npm run dev again, then refresh this page.');
+    }
+    return saved as T;
+  });
   pendingWorkspaceSave = next;
-  await next;
+  return next;
 }
 
 export type OnboardingEmail = {

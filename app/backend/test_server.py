@@ -87,12 +87,67 @@ class ApiTests(unittest.TestCase):
     def test_workspace_persists_in_sqlite(self):
         cookie = self.login()
         self.assertIsNone(self.request('workspace', cookie=cookie)[1])
-        state = {'roster': [{'name': 'Taylor'}], 'tasks': {'taylor': ['offer']}, 'profiles': []}
-        self.assertEqual(self.request('workspace', state, cookie)[0], 200)
+        state = {'roster': [{'id': 'taylor', 'name': 'Taylor Morgan'}], 'tasks': {'taylor': ['offer']}, 'profiles': []}
+        status, state, _ = self.request('workspace', state, cookie)
+        self.assertEqual(status, 200)
         server.initialize()  # Starting again retains the account, sessions, and records.
         self.assertEqual(self.request('workspace', cookie=cookie)[1], state)
         with server.connect() as db:
             self.assertEqual(json.loads(db.execute('SELECT data FROM workspaces').fetchone()[0]), state)
+
+    def test_generated_emails_are_unique_stable_and_server_controlled(self):
+        cookie = self.login()
+        state = {'roster': [
+            {'id': 'one', 'firstName': 'Taylor', 'lastName': 'Morgan', 'email': 'chosen@scotiabank.com'},
+            {'id': 'two', 'name': 'Taylor Morgan'},
+            {'id': 'three', 'name': 'Taylor Morgan'},
+            {'id': 'accent', 'firstName': 'Renée', 'lastName': "O’Neil"},
+        ], 'tasks': {}, 'profiles': []}
+        status, saved, _ = self.request('workspace', state, cookie)
+        self.assertEqual(status, 200)
+        self.assertEqual([p['email'] for p in saved['roster']], [
+            'taylor.morgan@scotiabank.com', 'taylor.morgan2@scotiabank.com',
+            'taylor.morgan3@scotiabank.com', 'renee.oneil@scotiabank.com'])
+        saved['roster'][0].update(firstName='Different', email='hacked@scotiabank.com', type='offboarding')
+        _, saved, _ = self.request('workspace', saved, cookie)
+        self.assertEqual(saved['roster'][0]['email'], 'taylor.morgan@scotiabank.com')
+        saved['roster'][0]['type'] = 'onboarding'
+        _, saved, _ = self.request('workspace', saved, cookie)
+        self.assertEqual(saved['roster'][0]['email'], 'taylor.morgan@scotiabank.com')
+        saved['roster'] = []
+        self.request('workspace', saved, cookie)
+        server.initialize()
+        saved['roster'] = [{'id': 'four', 'name': 'Taylor Morgan'}]
+        _, saved, _ = self.request('workspace', saved, cookie)
+        self.assertEqual(saved['roster'][0]['email'], 'taylor.morgan4@scotiabank.com')
+        self.assertEqual(self.request('workspace', cookie=cookie)[1], saved)
+
+    def test_existing_workspace_email_migration(self):
+        legacy = {'roster': [
+            {'id': 'one', 'name': 'Taylor Morgan', 'email': 'existing@scotiabank.com'},
+            {'id': 'two', 'name': 'Taylor Morgan', 'email': 'existing@scotiabank.com'},
+            {'id': 'three', 'name': 'Alex Chen', 'email': 'personal@example.com'},
+            {'id': 'four', 'name': 'Sam Lee'},
+        ], 'tasks': {'one': ['offer']}, 'profiles': []}
+        with server.connect() as db:
+            db.execute('INSERT INTO workspaces VALUES (?, ?)', ('jordan', json.dumps(legacy)))
+        server.initialize()
+        server.initialize()
+        cookie = self.login()
+        saved = self.request('workspace', cookie=cookie)[1]
+        addresses = [p['email'] for p in saved['roster']]
+        self.assertEqual(addresses[0], 'existing@scotiabank.com')
+        self.assertEqual(len(set(addresses)), 4)
+        self.assertTrue(all(address.endswith('@scotiabank.com') for address in addresses))
+        self.assertEqual(saved['tasks'], legacy['tasks'])
+        with server.connect() as db:
+            other = server.ensure_emails(db, 'another-manager', {'roster': [{'id': 'four', 'name': 'Sam Lee'}]})
+        self.assertEqual(other['roster'][0]['email'], 'sam.lee2@scotiabank.com')
+
+    def test_rejects_duplicate_employee_record_ids(self):
+        cookie = self.login()
+        state = {'roster': [{'id': 'one'}, {'id': 'one'}], 'tasks': {}, 'profiles': []}
+        self.assertEqual(self.request('workspace', state, cookie)[0], 400)
 
     def test_sign_out_and_expired_session(self):
         cookie = self.login()

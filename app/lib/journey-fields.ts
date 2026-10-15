@@ -1,6 +1,6 @@
 export const MANUAL_PROFILE = '__manual__';
 export type JourneyFields = {
-  firstName: string; lastName: string; email: string; managerFirstName: string; managerLastName: string;
+  returning?: boolean; firstName: string; lastName: string; email: string; managerFirstName: string; managerLastName: string;
   date: string; profileId: string; businessArea: string; jobTitle: string; sid: string; eid: string;
   laptop: string; headset: string; softwareMode: string; accessMode: string; software: string[]; access: string[];
 };
@@ -10,14 +10,13 @@ export function splitName(value = ''): {firstName: string; lastName: string} {
 }
 export function fullName(first: string, last: string): string { return `${first.trim()} ${last.trim()}`.trim().replace(/\s+/g, ' '); }
 export function validateJourney(fields: JourneyFields, type: 'onboarding' | 'offboarding', profileIds: string[]) {
-  const required = ['firstName', 'lastName', 'email', 'managerFirstName', 'managerLastName', 'date'] as const;
+  const required = ['firstName', 'lastName', 'managerFirstName', 'managerLastName', 'date'] as const;
   if (required.some((key) => !fields[key]?.trim())) throw new Error('Complete every required field.');
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fields.email.trim())) throw new Error('Enter a valid Scotiabank email.');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(fields.date) || !Number.isFinite(Date.parse(fields.date + 'T12:00:00')) || new Date(fields.date + 'T12:00:00Z').toISOString().slice(0,10) !== fields.date) throw new Error('Enter a valid date.');
-  if (type === 'offboarding') {
+  if (type === 'offboarding' || fields.returning) {
     if (!/^s\d{7}$/.test(fields.sid.trim().toLowerCase())) throw new Error('SID must be s followed by seven digits.');
     if (!/^\d{8}$/.test(fields.eid.trim())) throw new Error('EID must contain eight digits.');
-    return;
+    if (type === 'offboarding') return;
   }
   if (!fields.businessArea.trim()) throw new Error('Choose a business area.');
   if (fields.profileId !== MANUAL_PROFILE) {
