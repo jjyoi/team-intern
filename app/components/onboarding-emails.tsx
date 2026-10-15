@@ -21,12 +21,17 @@ export function OnboardingEmails({ search, employees, onOpenPerson }: { search: 
   const [reload, setReload] = useState(0);
   useEffect(() => {
     let active = true;
-    setLoading(true); setError('');
     listEmails().then((items) => { if (active) setMessages(items); })
       .catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : 'Could not load messages.'); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [reload]);
+
+  function retry() {
+    setLoading(true);
+    setError('');
+    setReload((value) => value + 1);
+  }
 
   async function open(message: OnboardingEmail) {
     setSelected(message);
@@ -48,20 +53,20 @@ export function OnboardingEmails({ search, employees, onOpenPerson }: { search: 
     <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
       <div><h1 id="emails-heading" className="text-2xl font-semibold tracking-tight sm:text-3xl">Emails</h1><p className="mt-2 text-sm leading-relaxed text-black/70">Read the key update, then open the message for full details.</p></div>
       <div className="flex flex-wrap items-center gap-4">
-        <label className="flex items-center gap-3 text-sm font-medium">Person
-          <NativeSelect aria-label="Filter emails by managed person" value={activePersonId} onChange={(event) => setPersonId(event.target.value)} className="w-48 bg-white">
+        <label htmlFor="email-person-filter" className="flex items-center gap-3 text-sm font-medium">Person
+          <NativeSelect id="email-person-filter" aria-label="Filter emails by managed person" value={activePersonId} onChange={(event) => setPersonId(event.target.value)} className="w-48 bg-white">
             <NativeSelectOption value="all">All people</NativeSelectOption>
             {[...employees].sort((a, b) => a.name.localeCompare(b.name)).map((person) => <NativeSelectOption key={person.id} value={person.id}>{person.name}</NativeSelectOption>)}
           </NativeSelect>
         </label>
-      <label className="flex items-center gap-3 text-sm font-medium">Show
-        <NativeSelect aria-label="Filter emails" value={unreadOnly ? 'unread' : 'all'} onChange={(event) => setUnreadOnly(event.target.value === 'unread')} className="w-40 bg-white"><NativeSelectOption value="all">All messages</NativeSelectOption><NativeSelectOption value="unread">Unread</NativeSelectOption></NativeSelect>
+      <label htmlFor="email-read-filter" className="flex items-center gap-3 text-sm font-medium">Show
+        <NativeSelect id="email-read-filter" aria-label="Filter emails" value={unreadOnly ? 'unread' : 'all'} onChange={(event) => setUnreadOnly(event.target.value === 'unread')} className="w-40 bg-white"><NativeSelectOption value="all">All messages</NativeSelectOption><NativeSelectOption value="unread">Unread</NativeSelectOption></NativeSelect>
       </label>
       </div>
     </div>
-    {error && <div role="alert" className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-[#e9c4c4] bg-white p-4"><p className="text-sm text-[#9b1018]">{error}</p><Button variant="outline" onClick={() => setReload((value) => value + 1)}>Retry</Button></div>}
-    {loading ? <p role="status" className="py-8 text-sm">Loading messages…</p> : <>
-      <p role="status" className="mb-4 text-sm text-black/70">{visible.length} {visible.length === 1 ? 'message' : 'messages'} · {unread} unread</p>
+    {error && <div role="alert" className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-[#e9c4c4] bg-white p-4"><p className="text-sm text-[#9b1018]">{error}</p><Button variant="outline" onClick={retry}>Retry</Button></div>}
+    {loading ? <output className="block py-8 text-sm">Loading messages…</output> : <>
+      <output className="mb-4 block text-sm text-black/70">{visible.length} {visible.length === 1 ? 'message' : 'messages'} · {unread} unread</output>
       <ul className="space-y-3">{visible.map((message) => <li key={message.id}>
         <button onClick={() => void open(message)} className="flex w-full items-start gap-4 rounded-lg border border-black/10 bg-white p-5 text-left hover:border-black/30">
           <Mail aria-hidden="true" className={`mt-1 hidden size-5 shrink-0 sm:block ${message.is_read ? 'text-black/45' : 'text-[#b00d15]'}`} />
